@@ -1,5 +1,6 @@
 use std::{fmt::{self, Debug}, io::{self, Read}};
 
+use bitflags::bitflags;
 use collect_result::CollectResult;
 
 pub type ConstIndex = u16;
@@ -38,7 +39,7 @@ pub struct ClassFile {
     pub version: (u16, u16),
 
     pub constant_pool: Box<[Constant]>,
-    pub access_flags: u16,
+    pub access_flags: AccessFlags,
     pub this_class: u16,
     pub super_class: u16,
 
@@ -181,7 +182,7 @@ impl Constant {
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct Field {
-    pub access_flags: u16,
+    pub access_flags: AccessFlags,
     pub name_index: ConstIndex,
     pub descriptor_index: ConstIndex,
     pub attributes: Box<[AttributeInfo]>,
@@ -189,7 +190,7 @@ pub struct Field {
 impl Field {
     fn read<R: Read>(reader: &mut R, constant_pool: &[Constant]) -> io::Result<Self> {
         Ok(Self {
-            access_flags: reader.read_u16()?,
+            access_flags: AccessFlags::from_bits_retain(reader.read_u16()?),
             name_index: reader.read_u16()?,
             descriptor_index: reader.read_u16()?,
             attributes: {
@@ -205,7 +206,7 @@ impl Field {
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct Method {
-    pub access_flags: u16,
+    pub access_flags: AccessFlags,
     pub name_index: ConstIndex,
     pub descriptor_index: ConstIndex,
     pub attributes: Box<[AttributeInfo]>,
@@ -213,7 +214,7 @@ pub struct Method {
 impl Method {
     fn read<R: Read>(reader: &mut R, constant_pool: &[Constant]) -> io::Result<Self> {
         Ok(Self {
-            access_flags: reader.read_u16()?,
+            access_flags: AccessFlags::from_bits_retain(reader.read_u16()?),
             name_index: reader.read_u16()?,
             descriptor_index: reader.read_u16()?,
             attributes: {
@@ -395,6 +396,23 @@ impl Debug for RawBytes {
         write!(f, "]")
     }
 }
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct AccessFlags: u16 {
+        const PUBLIC = 0x0001;
+        const PRIVATE = 0x0002;
+        const PROTECTED = 0x0004;
+        const STATIC = 0x0008;
+        const FINAL = 0x0010;
+        const SYNCHRONIZED = 0x0020;
+        const BRIDGE = 0x0040;
+        const VARARGS = 0x0080;
+        const NATIVE = 0x0100;
+        const ABSTRACT = 0x0400;
+        const STRICT = 0x0800;
+        const SYNTHETIC = 0x1000;
+    }
+}
 
 impl ClassFile {
     pub fn from_reader<R: Read>(mut reader: R) -> io::Result<Self> {
@@ -431,7 +449,7 @@ impl ClassFile {
         Ok(ClassFile {
             version,
             constant_pool: constant_pool.into_boxed_slice(),
-            access_flags,
+            access_flags: AccessFlags::from_bits_retain(access_flags),
             this_class,
             super_class,
             interfaces: interfaces.into_boxed_slice(),
