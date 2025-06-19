@@ -150,11 +150,35 @@ impl Constant {
             1 => Self::Utf8 ({
                 let length = reader.read_u16()?;
                 let mut string = String::with_capacity(length as usize);
+                let error = || io::Error::new(io::ErrorKind::InvalidData, "incorrect \"modified\" utf-8 byte");
                 for _ in 0..length {
                     let b = reader.read_u8()?;
+                    // wtf is this
                     match b {
                         1..=0x7f => string.push(b as char),
-                        _ => todo!(),
+                        x @ 0b1100_0000..= 0b1101_1111 => {
+                            let x = x as u32;
+                            let y = reader.read_u8()? as u32;
+                            string.push(char::from_u32(((x & 0x1f) << 6) + (y & 0x3f)).ok_or_else(error)?);
+                        }
+                        u @ 0b1110_1101 => {
+                            let v = reader.read_u8()? as u32;
+                            let w = reader.read_u8()? as u32;
+                            let x = reader.read_u8()?;
+                            if u != x {
+                                return Err(error());
+                            }
+                            let y = reader.read_u8()? as u32;
+                            let z = reader.read_u8()? as u32;
+                            string.push(char::from_u32(0x10000 + ((v & 0x0f) << 16) + ((w & 0x3f) << 10) + ((y & 0x0f) << 6) + (z & 0x3f)).ok_or_else(error)?);
+                        }
+                        x @ 0b1110_0000..= 0b1110_1111 => {
+                            let x = x as u32;
+                            let y = reader.read_u8()? as u32;
+                            let z = reader.read_u8()? as u32;
+                            string.push(char::from_u32(((x & 0xf) << 12) + ((y & 0x3f) << 6) + (z & 0x3f)).ok_or_else(error)?);
+                        }
+                        _ => return Err(error()),
                     }
                 }
                 string.into_boxed_str()
