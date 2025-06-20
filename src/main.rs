@@ -7,16 +7,21 @@ use std::{
 use jappuccino::class::{AttributeInfo, ClassFile, ConstIndex, Constant, ExceptionEntry, Field, LineNumberEntry, Method};
 
 fn main() {
+    let mut show_constant_pool = false;
     for arg in args_os().skip(1) {
+        if arg == "-c" {
+            show_constant_pool = true;
+            continue;
+        }
         stdout().write_all(arg.as_encoded_bytes()).unwrap();
         println!(":");
         let file = File::open(arg).unwrap();
         let class = ClassFile::from_reader(BufReader::new(file)).unwrap();
-        print_class(class);
+        print_class(class, show_constant_pool);
     }
 }
 
-fn print_class(class: ClassFile) {
+fn print_class(class: ClassFile, show_constant_pool: bool) {
     let ClassFile {
         version,
         constant_pool,
@@ -30,13 +35,15 @@ fn print_class(class: ClassFile) {
     } = class;
 
     println!("version: {}.{}", version.0, version.1);
-    println!("constant pool:");
-    for (constant, n) in constant_pool.iter().zip(1..) {
-        print!("  {n}: ");
-        print_constant(constant, &constant_pool);
-        println!();
+    if show_constant_pool {
+        println!("constant pool:");
+        for (constant, n) in constant_pool.iter().zip(1..) {
+            print!("  {n}: ");
+            print_constant(constant, &constant_pool);
+            println!();
+        }
     }
-    println!("access flags: {access_flags:?}");
+    println!("access flags: {access_flags}");
     print!("this: ");
     print_cpn(this_class, &constant_pool);
     println!();
@@ -58,12 +65,12 @@ fn print_class(class: ClassFile) {
             descriptor_index,
             attributes,
         } = field;
-        print!("{access_flags:?} ");
+        print!("{access_flags} ");
         print_cpn(name_index, &constant_pool);
         print!(" ");
         print_cpn(descriptor_index, &constant_pool);
         println!();
-        print_attributes(&attributes, 2);
+        print_attributes(&attributes, 2, &constant_pool);
     }
     println!("methods:");
     for (n, method) in methods.into_iter().enumerate() {
@@ -74,15 +81,15 @@ fn print_class(class: ClassFile) {
             descriptor_index,
             attributes,
         } = method;
-        print!("{access_flags:?} ");
+        print!("{access_flags} ");
         print_cpn(name_index, &constant_pool);
         print!(" ");
         print_cpn(descriptor_index, &constant_pool);
         println!();
-        print_attributes(&attributes, 2);
+        print_attributes(&attributes, 2, &constant_pool);
     }
     println!("attributes:");
-    print_attributes(&attributes, 1);
+    print_attributes(&attributes, 1, &constant_pool);
 }
 
 fn get_constant(n: ConstIndex, constant_pool: &[Constant]) -> &Constant {
@@ -90,7 +97,7 @@ fn get_constant(n: ConstIndex, constant_pool: &[Constant]) -> &Constant {
 }
 #[inline]
 fn print_cpn(n: ConstIndex, constant_pool: &[Constant]) {
-    print!("({n}) ");
+    print!("#{n} ");
     print_constant(get_constant(n, constant_pool), constant_pool);
 }
 fn print_constant(constant: &Constant, constant_pool: &[Constant]) {
@@ -179,7 +186,7 @@ fn print_constant(constant: &Constant, constant_pool: &[Constant]) {
     }
 }
 
-fn print_attributes(attributes: &[AttributeInfo], indent: u8) {
+fn print_attributes(attributes: &[AttributeInfo], indent: u8, constant_pool: &[Constant]) {
     for (n, attribute) in attributes.into_iter().enumerate() {
         for _ in 0..indent {
             print!("  ");
@@ -213,10 +220,12 @@ fn print_attributes(attributes: &[AttributeInfo], indent: u8) {
                     print!("  ");
                 }
                 println!("attributes:");
-                print_attributes(attributes, indent+2);
+                print_attributes(attributes, indent+2, constant_pool);
             }
-            AttributeInfo::SourceFile { sourcefile_index } => {
-                println!("SourceFile {sourcefile_index}");
+            &AttributeInfo::SourceFile { sourcefile_index } => {
+                print!("SourceFile ");
+                print_cpn(sourcefile_index, constant_pool);
+                println!();
             }
             AttributeInfo::LineNumberTable(items) => {
                 println!("LineNumberTable:");

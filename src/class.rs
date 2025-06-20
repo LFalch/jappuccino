@@ -1,45 +1,18 @@
-use std::{fmt::{self, Debug}, io::{self, Read}};
+use std::{fmt::{self, Debug, Display}, io::{self, Read}};
 
 use bitflags::bitflags;
 use collect_result::CollectResult;
 
-pub type ConstIndex = u16;
+use crate::{ReadIntExt, modified_utf8::read_modified_utf8};
 
-trait ReadIntExt {
-    fn read_u8(&mut self) -> io::Result<u8>;
-    fn read_u16(&mut self) -> io::Result<u16>;
-    fn read_u32(&mut self) -> io::Result<u32>;
-    fn read_bytes(&mut self, n: usize) -> io::Result<Box<[u8]>>;
-}
-impl<R: Read> ReadIntExt for R {
-    fn read_u8(&mut self) -> io::Result<u8> {
-        let mut buf = [0; 1];
-        self.read_exact(&mut buf)?;
-        Ok(u8::from_be_bytes(buf))
-    }
-    fn read_u16(&mut self) -> io::Result<u16> {
-        let mut buf = [0; 2];
-        self.read_exact(&mut buf)?;
-        Ok(u16::from_be_bytes(buf))
-    }
-    fn read_u32(&mut self) -> io::Result<u32> {
-        let mut buf = [0; 4];
-        self.read_exact(&mut buf)?;
-        Ok(u32::from_be_bytes(buf))
-    }
-    fn read_bytes(&mut self, n: usize) -> io::Result<Box<[u8]>> {
-        let mut buf = vec![0; n];
-        self.read_exact(&mut buf)?;
-        Ok(buf.into_boxed_slice())
-    }
-}
+pub type ConstIndex = u16;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassFile {
     pub version: (u16, u16),
 
     pub constant_pool: Box<[Constant]>,
-    pub access_flags: AccessFlags,
+    pub access_flags: ClassAccess,
     pub this_class: u16,
     pub super_class: u16,
 
@@ -149,39 +122,7 @@ impl Constant {
             },
             1 => Self::Utf8 ({
                 let length = reader.read_u16()?;
-                let mut string = String::with_capacity(length as usize);
-                let error = || io::Error::new(io::ErrorKind::InvalidData, "incorrect \"modified\" utf-8 byte");
-                for _ in 0..length {
-                    let b = reader.read_u8()?;
-                    // wtf is this
-                    match b {
-                        1..=0x7f => string.push(b as char),
-                        x @ 0b1100_0000..= 0b1101_1111 => {
-                            let x = x as u32;
-                            let y = reader.read_u8()? as u32;
-                            string.push(char::from_u32(((x & 0x1f) << 6) + (y & 0x3f)).ok_or_else(error)?);
-                        }
-                        u @ 0b1110_1101 => {
-                            let v = reader.read_u8()? as u32;
-                            let w = reader.read_u8()? as u32;
-                            let x = reader.read_u8()?;
-                            if u != x {
-                                return Err(error());
-                            }
-                            let y = reader.read_u8()? as u32;
-                            let z = reader.read_u8()? as u32;
-                            string.push(char::from_u32(0x10000 + ((v & 0x0f) << 16) + ((w & 0x3f) << 10) + ((y & 0x0f) << 6) + (z & 0x3f)).ok_or_else(error)?);
-                        }
-                        x @ 0b1110_0000..= 0b1110_1111 => {
-                            let x = x as u32;
-                            let y = reader.read_u8()? as u32;
-                            let z = reader.read_u8()? as u32;
-                            string.push(char::from_u32(((x & 0xf) << 12) + ((y & 0x3f) << 6) + (z & 0x3f)).ok_or_else(error)?);
-                        }
-                        _ => return Err(error()),
-                    }
-                }
-                string.into_boxed_str()
+                read_modified_utf8(reader, length as usize)?.into_boxed_str()
             }),
             15 => Self::MethodHandle {
                 reference_kind: reader.read_u8()?,
@@ -206,7 +147,7 @@ impl Constant {
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct Field {
-    pub access_flags: AccessFlags,
+    pub access_flags: FieldAccess,
     pub name_index: ConstIndex,
     pub descriptor_index: ConstIndex,
     pub attributes: Box<[AttributeInfo]>,
@@ -214,7 +155,7 @@ pub struct Field {
 impl Field {
     fn read<R: Read>(reader: &mut R, constant_pool: &[Constant]) -> io::Result<Self> {
         Ok(Self {
-            access_flags: AccessFlags::from_bits_retain(reader.read_u16()?),
+            access_flags: FieldAccess::from_bits_retain(reader.read_u16()?),
             name_index: reader.read_u16()?,
             descriptor_index: reader.read_u16()?,
             attributes: {
@@ -230,7 +171,7 @@ impl Field {
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct Method {
-    pub access_flags: AccessFlags,
+    pub access_flags: MethodAccess,
     pub name_index: ConstIndex,
     pub descriptor_index: ConstIndex,
     pub attributes: Box<[AttributeInfo]>,
@@ -238,7 +179,7 @@ pub struct Method {
 impl Method {
     fn read<R: Read>(reader: &mut R, constant_pool: &[Constant]) -> io::Result<Self> {
         Ok(Self {
-            access_flags: AccessFlags::from_bits_retain(reader.read_u16()?),
+            access_flags: MethodAccess::from_bits_retain(reader.read_u16()?),
             name_index: reader.read_u16()?,
             descriptor_index: reader.read_u16()?,
             attributes: {
@@ -422,7 +363,19 @@ impl Debug for RawBytes {
 }
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct AccessFlags: u16 {
+    pub struct FieldAccess: u16 {
+        const PUBLIC = 0x0001;
+        const PRIVATE = 0x0002;
+        const PROTECTED = 0x0004;
+        const STATIC = 0x0008;
+        const FINAL = 0x0010;
+        const VOLATILE = 0x0040;
+        const TRANSIENT = 0x0080;
+        const SYNTHETIC = 0x1000;
+        const ENUM = 0x4000;
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct MethodAccess: u16 {
         const PUBLIC = 0x0001;
         const PRIVATE = 0x0002;
         const PROTECTED = 0x0004;
@@ -435,6 +388,60 @@ bitflags! {
         const ABSTRACT = 0x0400;
         const STRICT = 0x0800;
         const SYNTHETIC = 0x1000;
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ClassAccess: u16 {
+        const PUBLIC = 0x0001;
+        const FINAL = 0x0010;
+        const SUPER = 0x0020;
+        const INTERFACE = 0x0200;
+        const ABSTRACT = 0x0400;
+        const SYNTHETIC = 0x1000;
+        const ANNOTATION = 0x2000;
+        const ENUM = 0x4000;
+        const MODUKE = 0x8000;
+    }
+}
+impl Display for FieldAccess {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut space = "";
+        for (name, _) in self.iter_names() {
+            // this is awful
+            write!(f, "{space}{}", name.to_lowercase())?;
+            space = " ";
+        }
+        if space == "" {
+            write!(f, "bare")?;
+        }
+        Ok(())
+    }
+}
+impl Display for MethodAccess {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut space = "";
+        for (name, _) in self.iter_names() {
+            // this is awful
+            write!(f, "{space}{}", name.to_lowercase())?;
+            space = " ";
+        }
+        if space == "" {
+            write!(f, "bare")?;
+        }
+        Ok(())
+    }
+}
+impl Display for ClassAccess {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut space = "";
+        for (name, _) in self.iter_names() {
+            // this is awful
+            write!(f, "{space}{}", name.to_lowercase())?;
+            space = " ";
+        }
+        if space == "" {
+            write!(f, "bare")?;
+        }
+        Ok(())
     }
 }
 
@@ -473,7 +480,7 @@ impl ClassFile {
         Ok(ClassFile {
             version,
             constant_pool: constant_pool.into_boxed_slice(),
-            access_flags: AccessFlags::from_bits_retain(access_flags),
+            access_flags: ClassAccess::from_bits_retain(access_flags),
             this_class,
             super_class,
             interfaces: interfaces.into_boxed_slice(),
