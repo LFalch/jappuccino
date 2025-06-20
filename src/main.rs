@@ -4,7 +4,10 @@ use std::{
     io::{BufReader, Write, stdout},
 };
 
-use jappuccino::class::{AttributeInfo, ClassFile, ConstIndex, Constant, ExceptionEntry, Field, LineNumberEntry, Method};
+use jappuccino::{
+    class::{AttributeInfo, ClassFile, ConstIndex, Constant, ExceptionEntry, Field, LineNumberEntry, Method},
+    descriptor::{AnyDescriptor, FieldDescriptor, MethodDescriptor},
+};
 
 fn main() {
     let mut show_constant_pool = false;
@@ -17,21 +20,21 @@ fn main() {
         println!(":");
         let file = File::open(arg).unwrap();
         let class = ClassFile::from_reader(BufReader::new(file)).unwrap();
-        print_class(class, show_constant_pool);
+        print_class(&class, show_constant_pool);
     }
 }
 
-fn print_class(class: ClassFile, show_constant_pool: bool) {
-    let ClassFile {
+fn print_class(class: &ClassFile, show_constant_pool: bool) {
+    let &ClassFile {
         version,
-        constant_pool,
+        ref constant_pool,
         access_flags,
         this_class,
         super_class,
-        interfaces,
-        fields,
-        methods,
-        attributes,
+        ref interfaces,
+        ref fields,
+        ref methods,
+        ref attributes,
     } = class;
 
     println!("version: {}.{}", version.0, version.1);
@@ -51,7 +54,7 @@ fn print_class(class: ClassFile, show_constant_pool: bool) {
     print_cpn(super_class, &constant_pool);
     println!();
     println!("interfaces:");
-    for (n, interface) in interfaces.into_iter().enumerate() {
+    for (n, &interface) in interfaces.iter().enumerate() {
         print!("  {n}: ");
         print_cpn(interface, &constant_pool);
         println!();
@@ -59,34 +62,32 @@ fn print_class(class: ClassFile, show_constant_pool: bool) {
     println!("fields:");
     for (n, field) in fields.into_iter().enumerate() {
         print!("  {n}: ");
-        let Field {
+        let &Field {
             access_flags,
             name_index,
             descriptor_index,
-            attributes,
+            ref attributes,
         } = field;
         print!("{access_flags} ");
-        print_cpn(name_index, &constant_pool);
+        print_field_descriptor(descriptor_index, &constant_pool);
         print!(" ");
-        print_cpn(descriptor_index, &constant_pool);
+        print_cpn(name_index, &constant_pool);
         println!();
-        print_attributes(&attributes, 2, &constant_pool);
+        print_attributes(attributes, 2, &constant_pool);
     }
     println!("methods:");
     for (n, method) in methods.into_iter().enumerate() {
         print!("  {n}: ");
-        let Method {
+        let &Method {
             access_flags,
             name_index,
             descriptor_index,
-            attributes,
+            ref attributes,
         } = method;
         print!("{access_flags} ");
-        print_cpn(name_index, &constant_pool);
-        print!(" ");
-        print_cpn(descriptor_index, &constant_pool);
+        print_imethod_descriptor(name_index, descriptor_index, constant_pool);
         println!();
-        print_attributes(&attributes, 2, &constant_pool);
+        print_attributes(attributes, 2, &constant_pool);
     }
     println!("attributes:");
     print_attributes(&attributes, 1, &constant_pool);
@@ -95,10 +96,33 @@ fn print_class(class: ClassFile, show_constant_pool: bool) {
 fn get_constant(n: ConstIndex, constant_pool: &[Constant]) -> &Constant {
     &constant_pool[n as usize - 1]
 }
+fn get_constant_utf8(n: ConstIndex, constant_pool: &[Constant]) -> &str {
+    match get_constant(n, constant_pool) {
+        Constant::Utf8(s) => s,
+        _ => unreachable!(),
+    }
+}
 #[inline]
 fn print_cpn(n: ConstIndex, constant_pool: &[Constant]) {
     print!("#{n} ");
     print_constant(get_constant(n, constant_pool), constant_pool);
+}
+fn print_field_descriptor(n: ConstIndex, constant_pool: &[Constant]) {
+    let fd = FieldDescriptor::from_bytes(get_constant_utf8(n, constant_pool).as_bytes()).unwrap();
+    print!("{}", fd.display_type());
+}
+fn print_imethod_descriptor(name: ConstIndex, descriptor: ConstIndex, constant_pool: &[Constant]) {
+    let name = get_constant_utf8(name, constant_pool);
+    print_method_descriptor(name, descriptor, constant_pool);
+}
+fn print_method_descriptor(name: &str, descriptor: ConstIndex, constant_pool: &[Constant]) {
+    let fd = MethodDescriptor::from_bytes(get_constant_utf8(descriptor, constant_pool).as_bytes()).unwrap();
+    print!("{}", fd.display_type(name));
+}
+fn print_descriptor(name: ConstIndex, descriptor: ConstIndex, constant_pool: &[Constant]) {
+    let name = get_constant_utf8(name, constant_pool);
+    let fd = AnyDescriptor::from_bytes(get_constant_utf8(descriptor, constant_pool).as_bytes()).unwrap();
+    print!("{}", fd.display_type(name));
 }
 fn print_constant(constant: &Constant, constant_pool: &[Constant]) {
     match *constant {
@@ -152,10 +176,8 @@ fn print_constant(constant: &Constant, constant_pool: &[Constant]) {
             name_index,
             descriptor_index,
         } => {
-            print!("NameAndType name = ");
-            print_cpn(name_index, constant_pool);
-            print!(" descriptor = ");
-            print_cpn(descriptor_index, constant_pool);
+            print!("NameAndType ");
+            print_descriptor(name_index, descriptor_index, constant_pool);
         },
         Constant::Utf8(ref s) => print!("{s:?}"),
         Constant::MethodHandle {
@@ -166,8 +188,8 @@ fn print_constant(constant: &Constant, constant_pool: &[Constant]) {
             print_cpn(reference_index, constant_pool);
         }
         Constant::MethodType { descriptor_index } => {
-            print!("MethodType descriptor = ");
-            print_cpn(descriptor_index, constant_pool);
+            print!("MethodType ");
+            print_method_descriptor("", descriptor_index, constant_pool);
         }
         Constant::InvokeDynamic {
             bootstrap_method_attr_index,
