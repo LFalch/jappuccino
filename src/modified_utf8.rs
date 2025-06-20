@@ -21,7 +21,6 @@ pub fn read_modified_utf8<R: Read>(mut reader: R, length: usize) -> io::Result<S
                 let x = x as u32;
                 let y = bytes.next().unwrap()? as u32;
                 let codepoint = (((x) & 0x1f) << 6) + ((y) & 0x3f);
-                eprintln!("2B: {codepoint:04X}");
                 string.push(char::from_u32(codepoint).ok_or_else(error)?);
             }
             x @ 0b1110_0000..=0b1110_1111 => {
@@ -32,7 +31,6 @@ pub fn read_modified_utf8<R: Read>(mut reader: R, length: usize) -> io::Result<S
                 if let Some(c) = char::from_u32(codepoint) {
                     string.push(c);
                 } else {
-                    eprintln!("3B: {codepoint:04X}");
                     match codepoint {
                         // high
                         0xd800..=0xdbff => {
