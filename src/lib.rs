@@ -3,6 +3,7 @@ use std::io::{self, Read};
 pub mod class;
 pub(crate) mod modified_utf8;
 pub mod descriptor;
+pub mod code;
 
 pub(crate) trait ReadIntExt {
     fn read_u8(&mut self) -> io::Result<u8>;

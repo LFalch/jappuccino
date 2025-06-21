@@ -20,11 +20,11 @@ fn main() {
         println!(":");
         let file = File::open(arg).unwrap();
         let class = ClassFile::from_reader(BufReader::new(file)).unwrap();
-        print_class(&class, show_constant_pool);
+        print_classfile(&class, show_constant_pool);
     }
 }
 
-fn print_class(class: &ClassFile, show_constant_pool: bool) {
+fn print_classfile(class: &ClassFile, show_constant_pool: bool) {
     let &ClassFile {
         version,
         ref constant_pool,
@@ -104,7 +104,6 @@ fn get_constant_utf8(n: ConstIndex, constant_pool: &[Constant]) -> &str {
 }
 #[inline]
 fn print_cpn(n: ConstIndex, constant_pool: &[Constant]) {
-    print!("#{n} ");
     print_constant(get_constant(n, constant_pool), constant_pool);
 }
 fn print_field_descriptor(n: ConstIndex, constant_pool: &[Constant]) {
@@ -134,18 +133,18 @@ fn print_constant(constant: &Constant, constant_pool: &[Constant]) {
             class_index,
             name_and_type_index,
         } => {
-            print!("Fieldref class = ");
+            print!("Fieldref ");
             print_cpn(class_index, constant_pool);
-            print!(" name_and_type = ");
+            print!(".");
             print_cpn(name_and_type_index, constant_pool);
         }
         Constant::Methodref {
             class_index,
             name_and_type_index,
         } => {
-            print!("Methodref class = ");
+            print!("Methodref ");
             print_cpn(class_index, constant_pool);
-            print!(" name_and_type = ");
+            print!(".");
             print_cpn(name_and_type_index, constant_pool);
         }
         Constant::InterfaceMethodref {
@@ -153,9 +152,9 @@ fn print_constant(constant: &Constant, constant_pool: &[Constant]) {
             name_and_type_index,
         } => {
             print!(
-            "InterfaceMethodref class = ");
+            "InterfaceMethodref ");
             print_cpn(class_index, constant_pool);
-            print!(" name_and_type = ");
+            print!(".");
             print_cpn(name_and_type_index, constant_pool);
         },
         Constant::String { string_index } => {
@@ -176,7 +175,6 @@ fn print_constant(constant: &Constant, constant_pool: &[Constant]) {
             name_index,
             descriptor_index,
         } => {
-            print!("NameAndType ");
             print_descriptor(name_index, descriptor_index, constant_pool);
         },
         Constant::Utf8(ref s) => print!("{s:?}"),
@@ -227,7 +225,8 @@ fn print_attributes(attributes: &[AttributeInfo], indent: u8, constant_pool: &[C
                 for _ in 0..indent+1 {
                     print!("  ");
                 }
-                println!("code = {code:?}"); // TODO: show code as mnemonics
+                println!("code:");
+                print!("{:.a$}", code, a = 2 * (indent as usize + 2));
                 for _ in 0..indent+1 {
                     print!("  ");
                 }

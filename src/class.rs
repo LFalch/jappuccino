@@ -3,7 +3,7 @@ use std::{fmt::{self, Debug, Display}, io::{self, Read}};
 use bitflags::bitflags;
 use collect_result::CollectResult;
 
-use crate::{ReadIntExt, modified_utf8::read_modified_utf8};
+use crate::{code::Code, modified_utf8::read_modified_utf8, ReadIntExt};
 
 pub type ConstIndex = u16;
 
@@ -219,7 +219,7 @@ pub enum AttributeInfo {
         max_stack: u16,
         max_locals: u16,
         /// Raw bytecode
-        code: RawBytes,
+        code: Code,
         exception_table: Box<[ExceptionEntry]>,
         attributes: Box<[AttributeInfo]>,
     },
@@ -271,7 +271,7 @@ impl AttributeInfo {
                 max_locals: reader.read_u16()?,
                 code: {
                     let code_length = reader.read_u32()?;
-                    RawBytes::read(&mut reader, code_length as usize)?
+                    Code(reader.read_bytes(code_length as usize)?)
                 },
                 exception_table: {
                     let exception_table_length = reader.read_u16()?;
@@ -347,11 +347,6 @@ pub struct LineNumberEntry {
 }
 #[derive(Clone, PartialEq)]
 pub struct RawBytes(pub Box<[u8]>);
-impl RawBytes {
-    fn read<R: Read>(reader: &mut R, n: usize) -> io::Result<Self> {
-        Ok(RawBytes(reader.read_bytes(n)?))
-    }
-}
 impl Debug for RawBytes {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "RawBytes[")?;
