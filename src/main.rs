@@ -214,8 +214,10 @@ fn print_attributes(attributes: &[AttributeInfo], indent: u8, constant_pool: &[C
         }
         print!("{n}: ");
         match attribute {
-            AttributeInfo::ConstantValue { constantvalue_index } => {
-                println!("ConstantValue {constantvalue_index}");
+            &AttributeInfo::ConstantValue { constantvalue_index } => {
+                print!("ConstantValue ");
+                print_cpn(constantvalue_index, constant_pool);
+                println!();
             }
             AttributeInfo::Code { max_stack, max_locals, code, exception_table, attributes } => {
                 println!("Code:");
@@ -279,9 +281,29 @@ fn print_attributes(attributes: &[AttributeInfo], indent: u8, constant_pool: &[C
                     println!("{entry:?}");
                 }
             }
-            AttributeInfo::Unknown(name, raw_bytes) => {
-                println!("{name} = {raw_bytes:?}");
-            },
+            AttributeInfo::Exceptions(raw_bytes) => println!("Exceptions {raw_bytes:?}"),
+            AttributeInfo::InnerClasses(raw_bytes) => println!("InnerClasses {raw_bytes:?}"),
+            AttributeInfo::EnclosingMethod(raw_bytes) => println!("EnclosingMethod {raw_bytes:?}"),
+            AttributeInfo::Synthetic(raw_bytes) => println!("Synthetic {raw_bytes:?}"),
+            AttributeInfo::Signature(raw_bytes) => println!("Signature {raw_bytes:?}"),
+            AttributeInfo::SourceDebugExtension(raw_bytes) => println!("SourceDebugExtension {raw_bytes:?}"),
+            AttributeInfo::LocalVariableTypeTable(raw_bytes) => println!("LocalVariableTypeTable {raw_bytes:?}"),
+            AttributeInfo::Deprecated(raw_bytes) => println!("Deprecated {raw_bytes:?}"),
+            AttributeInfo::RuntimeVisibleAnnotations(raw_bytes) => println!("RuntimeVisibleAnnotations {raw_bytes:?}"),
+            AttributeInfo::RuntimeInvisibleAnnotations(raw_bytes) => println!("RuntimeInvisibleAnnotations {raw_bytes:?}"),
+            AttributeInfo::RuntimeVisibleParameterAnnotations(raw_bytes) => println!("RuntimeVisibleParameterAnnotations {raw_bytes:?}"),
+            AttributeInfo::RuntimeInvisibleParameterAnnotations(raw_bytes) => println!("RuntimeInvisibleParameterAnnotations {raw_bytes:?}"),
+            AttributeInfo::RuntimeVisibleTypeAnnotations(raw_bytes) => println!("RuntimeVisibleTypeAnnotations {raw_bytes:?}"),
+            AttributeInfo::RuntimeInvisibleTypeAnnotations(raw_bytes) => println!("RuntimeInvisibleTypeAnnotations {raw_bytes:?}"),
+            AttributeInfo::AnnotationDefault(raw_bytes) => println!("AnnotationDefault {raw_bytes:?}"),
+            AttributeInfo::BootstrapMethods(raw_bytes) => println!("BootstrapMethods {raw_bytes:?}"),
+            AttributeInfo::NestHost(raw_bytes) => println!("NestHost {raw_bytes:?}"),
+            AttributeInfo::NestMembers(raw_bytes) => println!("NestMembers {raw_bytes:?}"),
+            AttributeInfo::PermittedSubclasses(raw_bytes) => println!("PermittedSubclasses {raw_bytes:?}"),
+            AttributeInfo::MethodParameters(raw_bytes) => println!("MethodParameters {raw_bytes:?}"),
+            AttributeInfo::Module(raw_bytes) => println!("Module {raw_bytes:?}"),
+            AttributeInfo::ModulePackages(raw_bytes) => println!("ModulePackages {raw_bytes:?}"),
+            AttributeInfo::ModuleMainClass(raw_bytes) => println!("ModuleMainClass {raw_bytes:?}"),
         }
     }
 }
