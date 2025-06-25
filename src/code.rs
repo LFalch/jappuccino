@@ -320,6 +320,37 @@ fn display_arg(opcode: Opcode, f: &mut fmt::Formatter<'_>, bytes: &mut impl Iter
             }
             write!(f, ", default: {}", i.wrapping_add(default as i64 as u64 as usize))?;
         }
+        Lookupswitch => {
+            let padding = (((i + 1) ^ 3) + 1) & 3;
+            let mut sep = "";
+            write!(f, "{{")?;
+            for _ in 0..padding {
+                let Some((_, b)) = bytes.next() else {
+                    return Ok(())
+                };
+                write!(f, "{sep}{b}")?;
+                sep = ", ";
+            }
+            write!(f, "}}")?;
+            let Some((_, default)) = extract_u32(bytes) else {
+                return Ok(())
+            };
+            let default = default as i32;
+            let Some((_, npairs)) = extract_u32(bytes) else {
+                return Ok(())
+            };
+            for _ in 0..npairs {
+                let Some((_, match_key)) = extract_u32(bytes) else {
+                    return Ok(())
+                };
+                let match_key = match_key as i32;
+                let Some((_, offset)) = extract_u32(bytes) else {
+                    return Ok(())
+                };
+                write!(f, ", {match_key}: {}", i.wrapping_add(offset as i32 as i64 as u64 as usize))?;
+            }
+            write!(f, ", default: {}", i.wrapping_add(default as i64 as u64 as usize))?;
+        }
         _ => {
             write!(f, " r#")?;
             let mut separator = " ";
