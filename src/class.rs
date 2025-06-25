@@ -78,6 +78,8 @@ pub enum Constant {
     Package {
         name_index: ConstIndex,
     },
+    /// usually low bytes of a long or double
+    Gap,
 }
 impl Constant {
     fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
@@ -141,8 +143,14 @@ impl Constant {
             20 => Self::Package {
                 name_index: reader.read_u16()?,
             },
-            _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "unknown class tag")),
+            n => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unknown constant tag {n}"))),
         })
+    }
+    const fn is_wide(&self) -> bool {
+        match self {
+            Self::Double { .. } | Self::Long { .. } => true,
+            _ => false,
+        }
     }
 }
 #[derive(Debug, Clone, PartialEq)]
@@ -453,7 +461,18 @@ impl ClassFile {
         // TODO: check if the version is supported
 
         let constant_pool_count = reader.read_u16()?;
-        let constant_pool: Vec<_> = (1..constant_pool_count).map(|_| Constant::read(&mut reader)).collect_result()?;
+        let mut was_wide = false;
+        // TODO: fix this bad hack
+        let constant_pool: Vec<_> = (1..constant_pool_count).map(|_| -> io::Result<Constant> {
+            if was_wide {
+                was_wide = false;
+                Ok(Constant::Gap)
+            } else {
+                let c = Constant::read(&mut reader)?;
+                was_wide = c.is_wide();
+                Ok(c)
+            }
+        }).collect_result()?;
         let access_flags = reader.read_u16()?;
         let this_class = reader.read_u16()?;
         let super_class = reader.read_u16()?;

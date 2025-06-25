@@ -230,208 +230,209 @@ pub enum Opcode {
 impl Opcode {
     pub const fn immediates(self) -> u8 {
         match self {
-            Opcode::Nop => 0,
-            Opcode::AconstNull => 0,
-            Opcode::IconstM1 => 0,
-            Opcode::Iconst0 => 0,
-            Opcode::Iconst1 => 0,
-            Opcode::Iconst2 => 0,
-            Opcode::Iconst3 => 0,
-            Opcode::Iconst4 => 0,
-            Opcode::Iconst5 => 0,
-            Opcode::Lconst0 => 0,
-            Opcode::Lconst1 => 0,
-            Opcode::Fconst0 => 0,
-            Opcode::Fconst1 => 0,
-            Opcode::Fconst2 => 0,
-            Opcode::Dconst0 => 0,
-            Opcode::Dconst1 => 0,
-            Opcode::Bipush => 1,
-            Opcode::Sipush => 2,
-            Opcode::Ldc => 1,
-            Opcode::LdcW => 2,
-            Opcode::Ldc2W => 2,
-            Opcode::Iload => 1,
-            Opcode::Lload => 1,
-            Opcode::Fload => 1,
-            Opcode::Dload => 1,
-            Opcode::Aload => 1,
-            Opcode::Iload0 => 0,
-            Opcode::Iload1 => 0,
-            Opcode::Iload2 => 0,
-            Opcode::Iload3 => 0,
-            Opcode::Lload0 => 0,
-            Opcode::Lload1 => 0,
-            Opcode::Lload2 => 0,
-            Opcode::Lload3 => 0,
-            Opcode::Fload0 => 0,
-            Opcode::Fload1 => 0,
-            Opcode::Fload2 => 0,
-            Opcode::Fload3 => 0,
-            Opcode::Dload0 => 0,
-            Opcode::Dload1 => 0,
-            Opcode::Dload2 => 0,
-            Opcode::Dload3 => 0,
-            Opcode::Aload0 => 0,
-            Opcode::Aload1 => 0,
-            Opcode::Aload2 => 0,
-            Opcode::Aload3 => 0,
-            Opcode::Iaload => 0,
-            Opcode::Laload => 0,
-            Opcode::Faload => 0,
-            Opcode::Daload => 0,
-            Opcode::Aaload => 0,
-            Opcode::Baload => 0,
-            Opcode::Caload => 0,
-            Opcode::Saload => 0,
-            Opcode::Istore => 1,
-            Opcode::Lstore => 1,
-            Opcode::Fstore => 1,
-            Opcode::Dstore => 1,
-            Opcode::Astore => 1,
-            Opcode::Istore0 => 0,
-            Opcode::Istore1 => 0,
-            Opcode::Istore2 => 0,
-            Opcode::Istore3 => 0,
-            Opcode::Lstore0 => 0,
-            Opcode::Lstore1 => 0,
-            Opcode::Lstore2 => 0,
-            Opcode::Lstore3 => 0,
-            Opcode::Fstore0 => 0,
-            Opcode::Fstore1 => 0,
-            Opcode::Fstore2 => 0,
-            Opcode::Fstore3 => 0,
-            Opcode::Dstore0 => 0,
-            Opcode::Dstore1 => 0,
-            Opcode::Dstore2 => 0,
-            Opcode::Dstore3 => 0,
-            Opcode::Astore0 => 0,
-            Opcode::Astore1 => 0,
-            Opcode::Astore2 => 0,
-            Opcode::Astore3 => 0,
-            Opcode::Iastore => 0,
-            Opcode::Lastore => 0,
-            Opcode::Fastore => 0,
-            Opcode::Dastore => 0,
-            Opcode::Aastore => 0,
-            Opcode::Bastore => 0,
-            Opcode::Castore => 0,
-            Opcode::Sastore => 0,
-            Opcode::Pop => 0,
-            Opcode::Pop2 => 0,
-            Opcode::Dup => 0,
-            Opcode::DupX1 => 0,
-            Opcode::DupX2 => 0,
-            Opcode::Dup2 => 0,
-            Opcode::Dup2X1 => 0,
-            Opcode::Dup2X2 => 0,
-            Opcode::Swap => 0,
-            Opcode::Iadd => 0,
-            Opcode::Ladd => 0,
-            Opcode::Fadd => 0,
-            Opcode::Dadd => 0,
-            Opcode::Isub => 0,
-            Opcode::Lsub => 0,
-            Opcode::Fsub => 0,
-            Opcode::Dsub => 0,
-            Opcode::Imul => 0,
-            Opcode::Lmul => 0,
-            Opcode::Fmul => 0,
-            Opcode::Dmul => 0,
-            Opcode::Idiv => 0,
-            Opcode::Ldiv => 0,
-            Opcode::Fdiv => 0,
-            Opcode::Ddiv => 0,
-            Opcode::Irem => 0,
-            Opcode::Lrem => 0,
-            Opcode::Frem => 0,
-            Opcode::Drem => 0,
-            Opcode::Ineg => 0,
-            Opcode::Lneg => 0,
-            Opcode::Fneg => 0,
-            Opcode::Dneg => 0,
-            Opcode::Ishl => 0,
-            Opcode::Lshl => 0,
-            Opcode::Ishr => 0,
-            Opcode::Lshr => 0,
-            Opcode::Iushr => 0,
-            Opcode::Lushr => 0,
-            Opcode::Iand => 0,
-            Opcode::Land => 0,
-            Opcode::Ior => 0,
-            Opcode::Lor => 0,
-            Opcode::Ixor => 0,
-            Opcode::Lxor => 0,
-            Opcode::Iinc => 2,
-            Opcode::I2l => 0,
-            Opcode::I2f => 0,
-            Opcode::I2d => 0,
-            Opcode::L2i => 0,
-            Opcode::L2f => 0,
-            Opcode::L2d => 0,
-            Opcode::F2i => 0,
-            Opcode::F2l => 0,
-            Opcode::F2d => 0,
-            Opcode::D2i => 0,
-            Opcode::D2l => 0,
-            Opcode::D2f => 0,
-            Opcode::I2b => 0,
-            Opcode::I2c => 0,
-            Opcode::I2s => 0,
-            Opcode::Lcmp => 0,
-            Opcode::Fcmpl => 0,
-            Opcode::Fcmpg => 0,
-            Opcode::Dcmpl => 0,
-            Opcode::Dcmpg => 0,
-            Opcode::Ifeq => 2,
-            Opcode::Ifne => 2,
-            Opcode::Iflt => 2,
-            Opcode::Ifge => 2,
-            Opcode::Ifgt => 2,
-            Opcode::Ifle => 2,
-            Opcode::IfIcmpeq => 2,
-            Opcode::IfIcmpne => 2,
-            Opcode::IfIcmplt => 2,
-            Opcode::IfIcmpge => 2,
-            Opcode::IfIcmpgt => 2,
-            Opcode::IfIcmple => 2,
-            Opcode::IfAcmpeq => 2,
-            Opcode::IfAcmpne => 2,
-            Opcode::Goto => 2,
-            Opcode::Jsr => 2,
-            Opcode::Ret => 1,
-            Opcode::Tableswitch => 16 /* + */,
-            Opcode::Lookupswitch => 8 /* + */,
-            Opcode::Ireturn => 0,
-            Opcode::Lreturn => 0,
-            Opcode::Freturn => 0,
-            Opcode::Dreturn => 0,
-            Opcode::Areturn => 0,
-            Opcode::Return => 0,
-            Opcode::Getstatic => 2,
-            Opcode::Putstatic => 2,
-            Opcode::Getfield => 2,
-            Opcode::Putfield => 2,
-            Opcode::Invokevirtual => 2,
-            Opcode::Invokespecial => 2,
-            Opcode::Invokestatic => 2,
-            Opcode::Invokeinterface => 4,
-            Opcode::Invokedynamic => 4,
-            Opcode::New => 2,
-            Opcode::Newarray => 1,
-            Opcode::Anewarray => 2,
-            Opcode::Arraylength => 0,
-            Opcode::Athrow => 0,
-            Opcode::Checkcast => 2,
-            Opcode::Instanceof => 2,
-            Opcode::Monitorenter => 0,
+            Opcode::Nop |
+            Opcode::AconstNull |
+            Opcode::IconstM1 |
+            Opcode::Iconst0 |
+            Opcode::Iconst1 |
+            Opcode::Iconst2 |
+            Opcode::Iconst3 |
+            Opcode::Iconst4 |
+            Opcode::Iconst5 |
+            Opcode::Lconst0 |
+            Opcode::Lconst1 |
+            Opcode::Fconst0 |
+            Opcode::Fconst1 |
+            Opcode::Fconst2 |
+            Opcode::Dconst0 |
+            Opcode::Dconst1 |
+            Opcode::Iload0 |
+            Opcode::Iload1 |
+            Opcode::Iload2 |
+            Opcode::Iload3 |
+            Opcode::Lload0 |
+            Opcode::Lload1 |
+            Opcode::Lload2 |
+            Opcode::Lload3 |
+            Opcode::Fload0 |
+            Opcode::Fload1 |
+            Opcode::Fload2 |
+            Opcode::Fload3 |
+            Opcode::Dload0 |
+            Opcode::Dload1 |
+            Opcode::Dload2 |
+            Opcode::Dload3 |
+            Opcode::Aload0 |
+            Opcode::Aload1 |
+            Opcode::Aload2 |
+            Opcode::Aload3 |
+            Opcode::Iaload |
+            Opcode::Laload |
+            Opcode::Faload |
+            Opcode::Daload |
+            Opcode::Aaload |
+            Opcode::Baload |
+            Opcode::Caload |
+            Opcode::Saload |
+            Opcode::Istore0 |
+            Opcode::Istore1 |
+            Opcode::Istore2 |
+            Opcode::Istore3 |
+            Opcode::Lstore0 |
+            Opcode::Lstore1 |
+            Opcode::Lstore2 |
+            Opcode::Lstore3 |
+            Opcode::Fstore0 |
+            Opcode::Fstore1 |
+            Opcode::Fstore2 |
+            Opcode::Fstore3 |
+            Opcode::Dstore0 |
+            Opcode::Dstore1 |
+            Opcode::Dstore2 |
+            Opcode::Dstore3 |
+            Opcode::Astore0 |
+            Opcode::Astore1 |
+            Opcode::Astore2 |
+            Opcode::Astore3 |
+            Opcode::Iastore |
+            Opcode::Lastore |
+            Opcode::Fastore |
+            Opcode::Dastore |
+            Opcode::Aastore |
+            Opcode::Bastore |
+            Opcode::Castore |
+            Opcode::Sastore |
+            Opcode::Pop |
+            Opcode::Pop2 |
+            Opcode::Dup |
+            Opcode::DupX1 |
+            Opcode::DupX2 |
+            Opcode::Dup2 |
+            Opcode::Dup2X1 |
+            Opcode::Dup2X2 |
+            Opcode::Swap |
+            Opcode::Iadd |
+            Opcode::Ladd |
+            Opcode::Fadd |
+            Opcode::Dadd |
+            Opcode::Isub |
+            Opcode::Lsub |
+            Opcode::Fsub |
+            Opcode::Dsub |
+            Opcode::Imul |
+            Opcode::Lmul |
+            Opcode::Fmul |
+            Opcode::Dmul |
+            Opcode::Idiv |
+            Opcode::Ldiv |
+            Opcode::Fdiv |
+            Opcode::Ddiv |
+            Opcode::Irem |
+            Opcode::Lrem |
+            Opcode::Frem |
+            Opcode::Drem |
+            Opcode::Ineg |
+            Opcode::Lneg |
+            Opcode::Fneg |
+            Opcode::Dneg |
+            Opcode::Ishl |
+            Opcode::Lshl |
+            Opcode::Ishr |
+            Opcode::Lshr |
+            Opcode::Iushr |
+            Opcode::Lushr |
+            Opcode::Iand |
+            Opcode::Land |
+            Opcode::Ior |
+            Opcode::Lor |
+            Opcode::Ixor |
+            Opcode::Lxor |
+            Opcode::I2l |
+            Opcode::I2f |
+            Opcode::I2d |
+            Opcode::L2i |
+            Opcode::L2f |
+            Opcode::L2d |
+            Opcode::F2i |
+            Opcode::F2l |
+            Opcode::F2d |
+            Opcode::D2i |
+            Opcode::D2l |
+            Opcode::D2f |
+            Opcode::I2b |
+            Opcode::I2c |
+            Opcode::I2s |
+            Opcode::Lcmp |
+            Opcode::Fcmpl |
+            Opcode::Fcmpg |
+            Opcode::Dcmpl |
+            Opcode::Dcmpg |
+            Opcode::Ireturn |
+            Opcode::Lreturn |
+            Opcode::Freturn |
+            Opcode::Dreturn |
+            Opcode::Areturn |
+            Opcode::Return |
+            Opcode::Arraylength |
+            Opcode::Athrow |
+            Opcode::Monitorenter |
             Opcode::Monitorexit => 0,
+
+            Opcode::Bipush |
+            Opcode::Ldc |
+            Opcode::Iload |
+            Opcode::Lload |
+            Opcode::Fload |
+            Opcode::Dload |
+            Opcode::Aload |
+            Opcode::Istore |
+            Opcode::Lstore |
+            Opcode::Fstore |
+            Opcode::Dstore |
+            Opcode::Astore |
+            Opcode::Ret |
+            Opcode::Newarray => 1,
+            Opcode::Sipush |
+            Opcode::LdcW |
+            Opcode::Ldc2W |
+            Opcode::Iinc |
+            Opcode::Ifeq |
+            Opcode::Ifne |
+            Opcode::Iflt |
+            Opcode::Ifge |
+            Opcode::Ifgt |
+            Opcode::Ifle |
+            Opcode::IfIcmpeq |
+            Opcode::IfIcmpne |
+            Opcode::IfIcmplt |
+            Opcode::IfIcmpge |
+            Opcode::IfIcmpgt |
+            Opcode::IfIcmple |
+            Opcode::IfAcmpeq |
+            Opcode::IfAcmpne |
+            Opcode::Goto |
+            Opcode::Jsr |
+            Opcode::Getstatic |
+            Opcode::Putstatic |
+            Opcode::Getfield |
+            Opcode::Putfield |
+            Opcode::Invokevirtual |
+            Opcode::Invokespecial |
+            Opcode::Invokestatic |
+            Opcode::New |
+            Opcode::Anewarray |
+            Opcode::Checkcast |
+            Opcode::Instanceof |
+            Opcode::Ifnull |
+            Opcode::Ifnonnull => 2,
             Opcode::Wide => 3 /* or 5 with iinc */,
             Opcode::Multianewarray => 3,
-            Opcode::Ifnull => 2,
-            Opcode::Ifnonnull => 2,
+            Opcode::Invokeinterface => 4,
+            Opcode::Invokedynamic => 4,
             Opcode::GotoW => 4,
             Opcode::JsrW => 4,
+            Opcode::Tableswitch => 16 /* + */,
+            Opcode::Lookupswitch => 8 /* + */,
 
             Opcode::Breakpoint => 0,
             Opcode::ReservedFuture => 0,

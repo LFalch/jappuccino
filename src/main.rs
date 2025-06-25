@@ -125,6 +125,7 @@ fn print_descriptor(name: ConstIndex, descriptor: ConstIndex, constant_pool: &[C
 }
 fn print_constant(constant: &Constant, constant_pool: &[Constant]) {
     match *constant {
+        Constant::Gap => (),
         Constant::Class { name_index } => {
             print!("Class ");
             print_cpn(name_index, constant_pool);
