@@ -63,7 +63,14 @@ fn display_arg_branch_offset(f: &mut fmt::Formatter<'_>, bytes: &mut impl Iterat
     let Some((s, offset)) = extract_u16(bytes) else {
         return Ok(());
     };
-    let target = (s as u16 - 1).wrapping_add(offset);
+    let target = (s as u32 - 1).wrapping_add(offset as i16 as i32 as u32);
+    write!(f, " .{target}")
+}
+fn display_arg_branch_offset_w(f: &mut fmt::Formatter<'_>, bytes: &mut impl Iterator<Item=(usize, u8)>) -> fmt::Result {
+    let Some((s, offset)) = extract_u32(bytes) else {
+        return Ok(());
+    };
+    let target = (s as u32 - 1).wrapping_add(offset);
     write!(f, " .{target}")
 }
 fn display_arg_const_index_byte(f: &mut fmt::Formatter<'_>, bytes: &mut impl Iterator<Item=(usize, u8)>) -> fmt::Result {
@@ -288,6 +295,8 @@ fn display_arg(opcode: Opcode, f: &mut fmt::Formatter<'_>, bytes: &mut impl Iter
         Jsr |
         Ifnull |
         Ifnonnull => display_arg_branch_offset(f, bytes)?,
+        GotoW |
+        JsrW => display_arg_branch_offset_w(f, bytes)?,
         Tableswitch => {
             let padding = (((i + 1) ^ 3) + 1) & 3;
             let mut sep = "";
@@ -351,15 +360,21 @@ fn display_arg(opcode: Opcode, f: &mut fmt::Formatter<'_>, bytes: &mut impl Iter
             }
             write!(f, ", default: {}", i.wrapping_add(default as i64 as u64 as usize))?;
         }
-        _ => {
-            write!(f, " r#")?;
-            let mut separator = " ";
-            // TODO: for relevant instructions, look up meaning of values from the constant pool
-            for b in (0..opcode.immediates()).map_while(|_| bytes.next().map(|p| p.1)) {
-                write!(f, "{separator}{b}")?;
-                separator = ", ";
-            }
+        Multianewarray => {
+            let Some((_, index)) = extract_u16(bytes) else {
+                return Ok(());
+            };
+            let Some((_, dimensions)) = bytes.next() else {
+                return Ok(());
+            };
+            write!(f, " #{index}, {dimensions}")?;
         }
+        Newarray => todo!(),
+        Wide => todo!(),
+        Impdep1 |
+        Impdep2 |
+        Breakpoint |
+        ReservedFuture => (),
     }
     Ok(())
 }
