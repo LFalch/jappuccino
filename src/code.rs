@@ -1,6 +1,6 @@
 use std::fmt::{self, Display};
 
-use num_enum::FromPrimitive;
+use num_enum::{TryFromPrimitive, FromPrimitive, IntoPrimitive};
 
 use self::opcode::Opcode;
 
@@ -8,6 +8,20 @@ pub mod opcode;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Code(pub Box<[u8]>);
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
+#[repr(u8)]
+enum PrimitiveArrayType {
+    Boolean = 4,
+    Char = 5,
+    Float = 6,
+    Double = 7,
+    Byte = 8,
+    Short = 9,
+    Int = 10,
+    Long = 11,
+}
 
 impl Display for Code {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -369,7 +383,22 @@ fn display_arg(opcode: Opcode, f: &mut fmt::Formatter<'_>, bytes: &mut impl Iter
             };
             write!(f, " #{index}, {dimensions}")?;
         }
-        Newarray => todo!(),
+        Newarray => {
+            let Some((_, t)) = bytes.next() else {
+                return Ok(());
+            };
+            match PrimitiveArrayType::try_from_primitive(t) {
+                Ok(PrimitiveArrayType::Boolean) => write!(f, " boolean")?,
+                Ok(PrimitiveArrayType::Char) => write!(f, " char")?,
+                Ok(PrimitiveArrayType::Float) => write!(f, " float")?,
+                Ok(PrimitiveArrayType::Double) => write!(f, " double")?,
+                Ok(PrimitiveArrayType::Byte) => write!(f, " byte")?,
+                Ok(PrimitiveArrayType::Short) => write!(f, " short")?,
+                Ok(PrimitiveArrayType::Int) => write!(f, " int")?,
+                Ok(PrimitiveArrayType::Long) => write!(f, " long")?,
+                Err(_) => write!(f, " ??{t}")?,
+            }
+        }
         Wide => todo!(),
         Impdep1 |
         Impdep2 |
