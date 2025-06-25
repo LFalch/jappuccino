@@ -399,7 +399,35 @@ fn display_arg(opcode: Opcode, f: &mut fmt::Formatter<'_>, bytes: &mut impl Iter
                 Err(_) => write!(f, " ??{t}")?,
             }
         }
-        Wide => todo!(),
+        Wide => {
+            let Some((_, o)) = bytes.next() else {
+                return Ok(());
+            };
+            let o = Opcode::from_primitive(o);
+            match o {
+                Iload |
+                Fload |
+                Aload |
+                Lload |
+                Dload |
+                Istore |
+                Fstore |
+                Astore |
+                Lstore |
+                Dstore |
+                Ret => {
+                    write!(f, " {}", o.mnemonic())?;
+                    display_arg_short(f, bytes)?;
+                },
+                Iinc => {
+                    write!(f, " {}", o.mnemonic())?;
+                    display_arg_short(f, bytes)?;
+                    write!(f, ",")?;
+                    display_arg_short(f, bytes)?;
+                }
+                _ => write!(f, "???")?,
+            }
+        }
         Impdep1 |
         Impdep2 |
         Breakpoint |
