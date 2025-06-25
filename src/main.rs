@@ -5,7 +5,7 @@ use std::{
 };
 
 use jappuccino::{
-    class::{AttributeInfo, ClassFile, ConstIndex, Constant, ExceptionEntry, Field, LineNumberEntry, Method},
+    class::{AttributeInfo, ClassFile, ConstIndex, Constant, ExceptionEntry, Field, LineNumberEntry, LocalVariableEntry, Method},
     descriptor::{AnyDescriptor, FieldDescriptor, MethodDescriptor},
 };
 
@@ -259,9 +259,29 @@ fn print_attributes(attributes: &[AttributeInfo], indent: u8, constant_pool: &[C
                     println!("start_pc = {start_pc} line_number {line_number}");
                 }
             }
+            AttributeInfo::LocalVariableTable(entries) => {
+                println!("LocalVariableTable:");
+                for entry in entries {
+                    let &LocalVariableEntry { start_pc, length, name_index, descriptor_index, index } = entry;
+                    for _ in 0..indent+1 {
+                        print!("  ");
+                    }
+                    print_descriptor(name_index, descriptor_index, constant_pool);
+                    println!(" => {index} @ Code[{start_pc}..{}] ", start_pc+length);
+                }
+            }
+            AttributeInfo::StackMapTable(entries) => {
+                println!("StackMapTable:");
+                for entry in entries {
+                    for _ in 0..indent+1 {
+                        print!("  ");
+                    }
+                    println!("{entry:?}");
+                }
+            }
             AttributeInfo::Unknown(name, raw_bytes) => {
                 println!("{name} = {raw_bytes:?}");
-            }
+            },
         }
     }
 }

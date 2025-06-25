@@ -231,7 +231,7 @@ pub enum AttributeInfo {
         exception_table: Box<[ExceptionEntry]>,
         attributes: Box<[AttributeInfo]>,
     },
-    // StackMapTable,
+    StackMapTable(Box<[StackMapFrame]>),
     // Exceptions,
     // InnerClasses,
     // EnclosingMethod,
@@ -242,7 +242,7 @@ pub enum AttributeInfo {
     },
     // SourceDebugExtension,
     LineNumberTable(Box<[LineNumberEntry]>),
-    // LocalVariableTable,
+    LocalVariableTable(Box<[LocalVariableEntry]>),
     // LocalVariableTypeTable,
     // Deprecated,
     // RuntimeVisibleAnnotations,
@@ -302,7 +302,13 @@ impl AttributeInfo {
                     attributes.into_boxed_slice()
                 },
             },
-            // "StackMapTable" => Self::StackMapTable,
+            "StackMapTable" => Self::StackMapTable({
+                let number_of_entries = reader.read_u16()?;
+                let entries: Vec<_> = (0..number_of_entries)
+                    .map(|_| StackMapFrame::read(&mut reader))
+                    .collect_result()?;
+                entries.into_boxed_slice()
+            }),
             // "Exceptions" => Self::Exceptions,
             // "InnerClasses" => Self::InnerClasses,
             // "EnclosingMethod" => Self::EnclosingMethod,
@@ -322,7 +328,19 @@ impl AttributeInfo {
                 }).collect_result()?;
                 line_number_table.into_boxed_slice()
             }),
-            // "LocalVariableTable" => Self::LocalVariableTable,
+            "LocalVariableTable" => Self::LocalVariableTable({
+                let local_variable_table_length = reader.read_u16()?;
+                let local_variable_table: Vec<_> = (0..local_variable_table_length).map(|_| -> io::Result<_> {
+                    Ok(LocalVariableEntry {
+                        start_pc: reader.read_u16()?,
+                        length: reader.read_u16()?,
+                        name_index: reader.read_u16()?,
+                        descriptor_index: reader.read_u16()?,
+                        index: reader.read_u16()?,
+                    })
+                }).collect_result()?;
+                local_variable_table.into_boxed_slice()
+            }),
             // "LocalVariableTypeTable" => Self::LocalVariableTypeTable,
             // "Deprecated" => Self::Deprecated,
             // "RuntimeVisibleAnnotations" => Self::RuntimeVisibleAnnotations,
@@ -352,6 +370,126 @@ pub struct ExceptionEntry {
 pub struct LineNumberEntry {
     pub start_pc: u16,
     pub line_number: u16,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalVariableEntry {
+    pub start_pc: u16,
+    pub length: u16,
+    pub name_index: u16,
+    pub descriptor_index: ConstIndex,
+    pub index: u16,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub enum VerificationTypeInfo {
+    Top,
+    Integer,
+    Float,
+    Long,
+    Double,
+    Null,
+    UninitializedThis,
+    Object(ConstIndex),
+    Uninitialized {
+        offset: u16
+    },
+}
+impl VerificationTypeInfo {
+    fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let tag = reader.read_u8()?;
+        Ok(match tag {
+            0 => Self::Top,
+            1 => Self::Integer,
+            2 => Self::Float,
+            3 => Self::Double,
+            4 => Self::Long,
+            5 => Self::Null,
+            6 => Self::UninitializedThis,
+            7 => Self::Object(reader.read_u16()?),
+            8 => Self::Uninitialized {
+                offset: reader.read_u16()?,
+            },
+            _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "unknown verification type info tag")),
+        })
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub enum StackMapFrame {
+    SameFrame {
+        offset_delta: u8,
+    },
+    SameLocals1StackItemFrame {
+        offset_delta: u8,
+        stack: VerificationTypeInfo,
+    },
+    SameLocals1StackItemFrameExtended {
+        offset_delta: u16,
+        stack: VerificationTypeInfo,
+    },
+    ChopFrame {
+        k: u8,
+        offset_delta: u16,
+    },
+    SameFrameExtended {
+        offset_delta: u16,
+    },
+    AppendFrame {
+        offset_delta: u16,
+        locals: Box<[VerificationTypeInfo]>,
+    },
+    FullFrame {
+        offset_delta: u16,
+        locals: Box<[VerificationTypeInfo]>,
+        stack: Box<[VerificationTypeInfo]>,
+    }
+}
+impl StackMapFrame {
+    fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let frame_type = reader.read_u8()?;
+        Ok(match frame_type {
+            0..=63 => Self::SameFrame { offset_delta: frame_type },
+            64..=127 => Self::SameLocals1StackItemFrame {
+                offset_delta: frame_type - 64,
+                stack: VerificationTypeInfo::read(reader)?,
+            },
+            128..=246 => return Err(io::Error::new(io::ErrorKind::InvalidData, "reserved frame type value")),
+            247 => Self::SameLocals1StackItemFrameExtended {
+                offset_delta: reader.read_u16()?,
+                stack: VerificationTypeInfo::read(reader)?,
+            },
+            248..=250 => Self::ChopFrame {
+                k: 251 - frame_type,
+                offset_delta: reader.read_u16()?,
+            },
+            251 => Self::SameFrameExtended {
+                offset_delta: reader.read_u16()?,
+            },
+            252..=254 => Self::AppendFrame {
+                offset_delta: reader.read_u16()?,
+                locals: (0..frame_type - 251)
+                    .map(|_| VerificationTypeInfo::read(reader))
+                    .collect_result::<Vec<_>>()?
+                    .into_boxed_slice(),
+            },
+            255 => {
+                let offset_delta = reader.read_u16()?;
+                let number_of_locals = reader.read_u16()?;
+                let locals =  (0..number_of_locals)
+                    .map(|_| VerificationTypeInfo::read(reader))
+                    .collect_result::<Vec<_>>()?
+                    .into_boxed_slice();
+                let number_of_stack_items = reader.read_u16()?;
+                let stack =  (0..number_of_stack_items)
+                    .map(|_| VerificationTypeInfo::read(reader))
+                    .collect_result::<Vec<_>>()?
+                    .into_boxed_slice();
+                Self::FullFrame {
+                    offset_delta,
+                    locals,
+                    stack,
+                }
+            }
+        })
+    }
 }
 #[derive(Clone, PartialEq)]
 pub struct RawBytes(pub Box<[u8]>);
