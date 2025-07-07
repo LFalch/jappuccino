@@ -1,0 +1,736 @@
+use std::{cmp::Reverse, collections::BTreeMap, fs::File, io::{self, BufReader}, iter, path::Path};
+
+use crate::{class::{AttributeInfo, ClassFile, ConstIndex, Constant, FieldAccess}, code::opcode::Opcode, descriptor::{DescriptorError, FieldDescriptor, MethodDescriptor}};
+
+mod bytes;
+mod builtin_methods;
+
+pub use bytes::*;
+use collect_result::CollectResult;
+use num_enum::FromPrimitive;
+pub type Result<T, E=RtError> = std::result::Result<T, E>;
+
+#[derive(Debug)]
+pub struct RuntimeCtx<'a> {
+    runtime: &'a mut Runtime,
+    stack: Vec<Value>,
+    return_stack: Vec<(u32, u32, usize)>,
+    frame_pointer: u32,
+    cur_class: u32,
+
+    pc: usize,
+}
+impl RuntimeCtx<'_> {
+    pub fn top(&self) -> Value {
+        *self.stack.last().unwrap()
+    }
+    pub fn top2(&self) -> (Value, Value) {
+        let l = self.stack.len();
+        (self.stack[l-2], self.stack[l-1])
+    }
+    pub fn pop(&mut self) -> Value {
+        self.stack.pop().unwrap()
+    }
+    pub fn pop2(&mut self) -> (Value, Value) {
+        let v2 = self.stack.pop().unwrap();
+        (self.stack.pop().unwrap(), v2)
+    }
+    pub fn push(&mut self, value: impl Into<Value>) {
+        self.stack.push(value.into());
+    }
+    pub fn push2(&mut self, value: impl Into<(Value, Value)>) {
+        let (v1, v2) = value.into();
+        self.stack.push(v1);
+        self.stack.push(v2);
+    }
+    pub fn get_local(&self, i: u16) -> Value {
+        self.stack[self.frame_pointer as usize + i as usize]
+    }
+    pub fn get_local2(&self, i: u16) -> (Value, Value) {
+        let i = self.frame_pointer as usize + i as usize;
+        (self.stack[i], self.stack[i + 1])
+    }
+    pub fn set_local(&mut self, i: u16, value: impl Into<Value>) {
+        self.stack[self.frame_pointer as usize + i as usize] = value.into();
+    }
+    pub fn set_local2(&mut self, i: u16, value: impl Into<(Value, Value)>) {
+        let i = self.frame_pointer as usize + i as usize;
+        let (v1, v2) = value.into();
+        self.stack[i] = v1;
+        self.stack[i + 1] = v2;
+    }
+    pub fn get_class_name(&self, _reference: Value) -> &str {
+        todo!()
+    }
+    pub fn get_class_object(&self, _reference: Value) -> Value {
+        todo!()
+    }
+    pub fn new_string_obj(&self, _s: impl Into<Box<str>>) -> Value {
+        todo!()
+    }
+    pub fn call_named(&mut self, classpath: &str, method_name: &str) -> Result<()> {
+        let id = self.runtime.load_class(classpath)?;
+        let method_id = *self.runtime.classes[id as usize].member_table().get(method_name).unwrap();
+        self.invoke(id, method_id);
+        Ok(())
+    }
+    pub fn invoke(&mut self, class: u32, method_id: u16) {
+        match self.runtime.classes[class as usize].method(method_id) {
+            Err(f) => f(self),
+            Ok(bm) => {
+                self.stack.reserve((bm.max_locals - bm.arg_num) as usize + bm.max_stack as usize);
+                self.do_call(class, bm.arg_num, bm.max_locals, bm.code_location);
+            }
+        }
+    }
+    pub fn do_call(&mut self, class: u32, arg_num: u16, max_locals: u16, location: usize) {
+        self.return_stack.push((self.cur_class, self.frame_pointer, self.pc));
+        self.frame_pointer = (self.stack.len() - arg_num as usize) as u32;
+        self.pc = location;
+        self.cur_class = class;
+        for _ in arg_num..max_locals {
+            self.stack.push(Value(0));
+        }
+    }
+    pub fn do_return(&mut self, ret_cat: ReturnCategory) {
+        let (class, fp, pc) = self.return_stack.pop().unwrap();
+        self.pc = pc;
+        self.cur_class = class;
+        match ret_cat {
+            ReturnCategory::Void => {
+                self.stack.truncate(self.frame_pointer as usize);
+                self.frame_pointer = fp;
+            }
+            ReturnCategory::Cat1 => {
+                let return_value = self.pop();
+                self.stack.truncate(self.frame_pointer as usize);
+                self.frame_pointer = fp;
+                self.push(return_value);
+            }
+            ReturnCategory::Cat2 => {
+                let return_value = self.pop2();
+                self.stack.truncate(self.frame_pointer as usize);
+                self.frame_pointer = fp;
+                self.push2(return_value);
+            }
+        }
+    }
+    fn read_constant(&self, n: ConstIndex) -> &Constant {
+        match &self.runtime.classes[self.cur_class as usize].runtime_info {
+            RuntimeInfo::Bytecode { constant_pool, .. } => {
+                &constant_pool[n as usize - 1]
+            }
+            _ => unimplemented!(),
+        }
+    }
+    fn new(&mut self, n: u32) -> Value {
+        Value(n << 12 - n)
+    }
+    fn decode_opcode(&mut self) -> Opcode {
+        let code = self.runtime.code.as_bytes_32aligned();
+        let opcode = Opcode::from_primitive(code[self.pc]);
+        self.pc += 1;
+        opcode
+    }
+    fn decode_u8(&mut self) -> u8 {
+        let code = self.runtime.code.as_bytes_32aligned();
+        let byte = code[self.pc];
+        self.pc += 1;
+        byte
+    }
+    fn decode_u16(&mut self) -> u16 {
+        let code = self.runtime.code.as_bytes_32aligned();
+        let short = u16::from_be_bytes([code[self.pc], code[self.pc+1]]);
+        self.pc += 2;
+        short
+    }
+    fn run_inner(&mut self) -> Result<()> {
+        while !self.return_stack.is_empty() {
+            match self.decode_opcode() {
+                Opcode::Nop => (),
+                Opcode::AconstNull => todo!(),
+                Opcode::IconstM1 => todo!(),
+                Opcode::Iconst0 => todo!(),
+                Opcode::Iconst1 => todo!(),
+                Opcode::Iconst2 => todo!(),
+                Opcode::Iconst3 => todo!(),
+                Opcode::Iconst4 => todo!(),
+                Opcode::Iconst5 => todo!(),
+                Opcode::Lconst0 => todo!(),
+                Opcode::Lconst1 => todo!(),
+                Opcode::Fconst0 => todo!(),
+                Opcode::Fconst1 => todo!(),
+                Opcode::Fconst2 => todo!(),
+                Opcode::Dconst0 => todo!(),
+                Opcode::Dconst1 => todo!(),
+                Opcode::Bipush => todo!(),
+                Opcode::Sipush => todo!(),
+                Opcode::Ldc => todo!(),
+                Opcode::LdcW => todo!(),
+                Opcode::Ldc2W => todo!(),
+                Opcode::Iload |
+                Opcode::Fload |
+                Opcode::Aload => {
+                    let index = self.decode_u8();
+                    let val = self.get_local(index as u16);
+                    self.push(val);
+                },
+                Opcode::Lload |
+                Opcode::Dload => {
+                    let index = self.decode_u8();
+                    let val = self.get_local2(index as u16);
+                    self.push2(val);
+                }
+                Opcode::Iload0 |
+                Opcode::Fload0 |
+                Opcode::Aload0 => {
+                    let val = self.get_local(0);
+                    self.push(val);
+                }
+                Opcode::Lload0 |
+                Opcode::Dload0 => {
+                    let val = self.get_local2(0);
+                    self.push2(val);
+                }
+                Opcode::Iload1 |
+                Opcode::Fload1 |
+                Opcode::Aload1 => {
+                    let val = self.get_local(1);
+                    self.push(val);
+                }
+                Opcode::Lload1 |
+                Opcode::Dload1 => {
+                    let val = self.get_local2(1);
+                    self.push2(val);
+                }
+                Opcode::Iload2 |
+                Opcode::Fload2 |
+                Opcode::Aload2  => {
+                    let val = self.get_local(2);
+                    self.push(val);
+                }
+                Opcode::Lload2 |
+                Opcode::Dload2  => {
+                    let val = self.get_local2(2);
+                    self.push2(val);
+                }
+                Opcode::Iload3 |
+                Opcode::Fload3 |
+                Opcode::Aload3  => {
+                    let val = self.get_local(3);
+                    self.push(val);
+                }
+                Opcode::Lload3 |
+                Opcode::Dload3  => {
+                    let val = self.get_local2(3);
+                    self.push2(val);
+                }
+                Opcode::Iaload => todo!(),
+                Opcode::Laload => todo!(),
+                Opcode::Faload => todo!(),
+                Opcode::Daload => todo!(),
+                Opcode::Aaload => todo!(),
+                Opcode::Baload => todo!(),
+                Opcode::Caload => todo!(),
+                Opcode::Saload => todo!(),
+                Opcode::Istore => todo!(),
+                Opcode::Lstore => todo!(),
+                Opcode::Fstore => todo!(),
+                Opcode::Dstore => todo!(),
+                Opcode::Astore => todo!(),
+                Opcode::Istore0 => todo!(),
+                Opcode::Istore1 => todo!(),
+                Opcode::Istore2 => todo!(),
+                Opcode::Istore3 => todo!(),
+                Opcode::Lstore0 => todo!(),
+                Opcode::Lstore1 => todo!(),
+                Opcode::Lstore2 => todo!(),
+                Opcode::Lstore3 => todo!(),
+                Opcode::Fstore0 => todo!(),
+                Opcode::Fstore1 => todo!(),
+                Opcode::Fstore2 => todo!(),
+                Opcode::Fstore3 => todo!(),
+                Opcode::Dstore0 => todo!(),
+                Opcode::Dstore1 => todo!(),
+                Opcode::Dstore2 => todo!(),
+                Opcode::Dstore3 => todo!(),
+                Opcode::Astore0 => todo!(),
+                Opcode::Astore1 => todo!(),
+                Opcode::Astore2 => todo!(),
+                Opcode::Astore3 => todo!(),
+                Opcode::Iastore => todo!(),
+                Opcode::Lastore => todo!(),
+                Opcode::Fastore => todo!(),
+                Opcode::Dastore => todo!(),
+                Opcode::Aastore => todo!(),
+                Opcode::Bastore => todo!(),
+                Opcode::Castore => todo!(),
+                Opcode::Sastore => todo!(),
+                Opcode::Pop => todo!(),
+                Opcode::Pop2 => todo!(),
+                Opcode::Dup => self.push(self.top()),
+                Opcode::DupX1 => todo!(),
+                Opcode::DupX2 => todo!(),
+                Opcode::Dup2 => todo!(),
+                Opcode::Dup2X1 => todo!(),
+                Opcode::Dup2X2 => todo!(),
+                Opcode::Swap => todo!(),
+                Opcode::Iadd => todo!(),
+                Opcode::Ladd => todo!(),
+                Opcode::Fadd => todo!(),
+                Opcode::Dadd => todo!(),
+                Opcode::Isub => todo!(),
+                Opcode::Lsub => todo!(),
+                Opcode::Fsub => todo!(),
+                Opcode::Dsub => todo!(),
+                Opcode::Imul => todo!(),
+                Opcode::Lmul => todo!(),
+                Opcode::Fmul => todo!(),
+                Opcode::Dmul => todo!(),
+                Opcode::Idiv => todo!(),
+                Opcode::Ldiv => todo!(),
+                Opcode::Fdiv => todo!(),
+                Opcode::Ddiv => todo!(),
+                Opcode::Irem => todo!(),
+                Opcode::Lrem => todo!(),
+                Opcode::Frem => todo!(),
+                Opcode::Drem => todo!(),
+                Opcode::Ineg => todo!(),
+                Opcode::Lneg => todo!(),
+                Opcode::Fneg => todo!(),
+                Opcode::Dneg => todo!(),
+                Opcode::Ishl => todo!(),
+                Opcode::Lshl => todo!(),
+                Opcode::Ishr => todo!(),
+                Opcode::Lshr => todo!(),
+                Opcode::Iushr => todo!(),
+                Opcode::Lushr => todo!(),
+                Opcode::Iand => todo!(),
+                Opcode::Land => todo!(),
+                Opcode::Ior => todo!(),
+                Opcode::Lor => todo!(),
+                Opcode::Ixor => todo!(),
+                Opcode::Lxor => todo!(),
+                Opcode::Iinc => todo!(),
+                Opcode::I2l => todo!(),
+                Opcode::I2f => todo!(),
+                Opcode::I2d => todo!(),
+                Opcode::L2i => todo!(),
+                Opcode::L2f => todo!(),
+                Opcode::L2d => todo!(),
+                Opcode::F2i => todo!(),
+                Opcode::F2l => todo!(),
+                Opcode::F2d => todo!(),
+                Opcode::D2i => todo!(),
+                Opcode::D2l => todo!(),
+                Opcode::D2f => todo!(),
+                Opcode::I2b => todo!(),
+                Opcode::I2c => todo!(),
+                Opcode::I2s => todo!(),
+                Opcode::Lcmp => todo!(),
+                Opcode::Fcmpl => todo!(),
+                Opcode::Fcmpg => todo!(),
+                Opcode::Dcmpl => todo!(),
+                Opcode::Dcmpg => todo!(),
+                Opcode::Ifeq => todo!(),
+                Opcode::Ifne => todo!(),
+                Opcode::Iflt => todo!(),
+                Opcode::Ifge => todo!(),
+                Opcode::Ifgt => todo!(),
+                Opcode::Ifle => todo!(),
+                Opcode::IfIcmpeq => todo!(),
+                Opcode::IfIcmpne => todo!(),
+                Opcode::IfIcmplt => todo!(),
+                Opcode::IfIcmpge => todo!(),
+                Opcode::IfIcmpgt => todo!(),
+                Opcode::IfIcmple => todo!(),
+                Opcode::IfAcmpeq => todo!(),
+                Opcode::IfAcmpne => todo!(),
+                Opcode::Goto => todo!(),
+                Opcode::Jsr => todo!(),
+                Opcode::Ret => todo!(),
+                Opcode::Tableswitch => todo!(),
+                Opcode::Lookupswitch => todo!(),
+                Opcode::Lreturn |
+                Opcode::Dreturn => self.do_return(ReturnCategory::Cat2),
+                Opcode::Ireturn |
+                Opcode::Freturn |
+                Opcode::Areturn => self.do_return(ReturnCategory::Cat1),
+                Opcode::Return => self.do_return(ReturnCategory::Void),
+                Opcode::Getstatic => todo!(),
+                Opcode::Putstatic => todo!(),
+                Opcode::Getfield => todo!(),
+                Opcode::Putfield => todo!(),
+                Opcode::Invokevirtual |
+                Opcode::Invokespecial => {
+                    let cpn = self.decode_u16();
+                    let class_name;
+                    let name_and_type;
+                    match self.read_constant(cpn) {
+                        &Constant::Methodref { class_index, name_and_type_index } => {
+                            class_name = match self.read_constant(class_index) {
+                                &Constant::Class { name_index } => match self.read_constant(name_index) {
+                                    Constant::Utf8(name) => name.clone(),
+                                    _ => unimplemented!(),
+                                }
+                                _ => unimplemented!(),
+                            };
+                            name_and_type = match self.read_constant(name_and_type_index) {
+                                &Constant::NameAndType { name_index, descriptor_index } => (
+                                    match self.read_constant(name_index) {
+                                        Constant::Utf8(name) => name.clone(),
+                                        _ => unimplemented!(),
+                                    },
+                                    match self.read_constant(descriptor_index) {
+                                        Constant::Utf8(name) => MethodDescriptor::from_bytes(name.as_bytes())?,
+                                        _ => unimplemented!(),
+                                    },
+                                ),
+                                _ => unimplemented!(),
+                            };
+                        }
+                        _ => unimplemented!(),
+                    }
+                    let (name, method_type) = name_and_type;
+                    eprintln!("Invoking {class_name} {}", method_type.display_type(&name));
+                    self.call_named(&class_name, &name)?;
+                }
+                Opcode::Invokestatic => todo!(),
+                Opcode::Invokeinterface => todo!(),
+                Opcode::Invokedynamic => todo!(),
+                Opcode::New => {
+                    let cpn = self.decode_u16();
+                    let class_name = match self.read_constant(cpn) {
+                        &Constant::Class { name_index } => match self.read_constant(name_index) {
+                            Constant::Utf8(name) => name.clone(),
+                            _ => unimplemented!(),
+                        }
+                        _ => unimplemented!(),
+                    };
+                    let id = self.runtime.load_class(&class_name)?;
+                    let r = self.new(id);
+                    self.push(r);
+                }
+                Opcode::Newarray => todo!(),
+                Opcode::Anewarray => todo!(),
+                Opcode::Arraylength => todo!(),
+                Opcode::Athrow => todo!(),
+                Opcode::Checkcast => todo!(),
+                Opcode::Instanceof => todo!(),
+                Opcode::Monitorenter => todo!(),
+                Opcode::Monitorexit => todo!(),
+                Opcode::Wide => todo!(),
+                Opcode::Multianewarray => todo!(),
+                Opcode::Ifnull => todo!(),
+                Opcode::Ifnonnull => todo!(),
+                Opcode::GotoW => todo!(),
+                Opcode::JsrW => todo!(),
+
+                Opcode::Breakpoint |
+                Opcode::ReservedFuture |
+                Opcode::Impdep1 |
+                Opcode::Impdep2 => return Err(RtError::ReservedInstruction)
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ReturnCategory {
+    Void = 0,
+    Cat1 = 1,
+    Cat2 = 2,
+}
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct Value(u32);
+impl Value {
+    pub fn as_u32(self) -> u32 {
+        self.0
+    }
+}
+impl From<bool> for Value {
+    fn from(value: bool) -> Self {
+        Value(value as u32)
+    }
+}
+impl From<i8> for Value {
+    fn from(value: i8) -> Self {
+        Value(value as i32 as u32)
+    }
+}
+impl From<i16> for Value {
+    fn from(value: i16) -> Self {
+        Value(value as i32 as u32)
+    }
+}
+impl From<i32> for Value {
+    fn from(value: i32) -> Self {
+        Value(value as u32)
+    }
+}
+
+#[derive(Debug, Clone)]
+// TODO: use this instead of `Constant` for the runtime constant pool
+#[allow(dead_code)]
+pub struct RuntimeConstant(u32);
+#[derive(Debug, Clone)]
+enum RuntimeInfo {
+    Builtin(Box<[fn(&mut RuntimeCtx)]>),
+    Bytecode {
+        method_code: Box<[BytecodeMethod]>,
+        constant_pool: Box<[Constant]>,
+    }
+}
+#[derive(Debug, Clone)]
+struct LoadedClass {
+    #[allow(dead_code)]
+    super_class: u32,
+    #[allow(dead_code)]
+    interfaces: Box<[u32]>,
+    /// name -> offset (in instance fields, static fields or method table)
+    member_table: BTreeMap<Box<str>, u16>,
+    #[allow(dead_code)]
+    static_fields: Box<Bytes32Aligned>,
+    runtime_info: RuntimeInfo,
+    data_size: u16,
+}
+#[derive(Debug, Clone, Copy)]
+struct BytecodeMethod {
+    max_stack: u16,
+    max_locals: u16,
+    arg_num: u16,
+    code_location: usize,
+}
+
+impl LoadedClass {
+    pub fn get_aligned_data_size(&self) -> u16 {
+        (self.data_size + 3) & !3
+    }
+    fn member_table(&self) -> &BTreeMap<Box<str>, u16> {
+        &self.member_table
+    }
+    fn method(&self, method_id: u16) -> Result<BytecodeMethod, fn(&mut RuntimeCtx)> {
+        match &self.runtime_info {
+            RuntimeInfo::Builtin(method_code) => Err(method_code[method_id as usize]),
+            RuntimeInfo::Bytecode{method_code, ..} => Ok(method_code[method_id as usize]),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Runtime {
+    class_names: BTreeMap<Box<str>, u32>,
+    classes: Vec<LoadedClass>,
+    code: Vec<u32>,
+}
+impl Runtime {
+    pub fn new() -> Self {
+        let mut class_names = BTreeMap::new();
+        class_names.insert("java/lang/Object".into(), 0);
+        Self {
+            class_names,
+            code: Vec::new(),
+            classes: vec![load_builtin("java/lang/Object").unwrap()],
+        }
+    }
+    fn get_class(&mut self, id: u32) -> Result<&LoadedClass> {
+        Ok(&self.classes[id as usize])
+    }
+    /// The class path should separate packages with slashes (`/`)
+    pub fn load_class(&mut self, classpath: &str) -> Result<u32> {
+        if let Some(&v) = self.class_names.get(classpath) {
+            return Ok(v);
+        }
+        eprintln!("Loading {classpath}");
+
+        let id;
+        if let Some(cls) = load_builtin(classpath) {
+            id = self.classes.len() as u32;
+            self.classes.push(cls);
+        } else {
+            let path: &Path = classpath.as_ref();
+            let file = File::open(path.with_extension("class"))?;
+            let class_file = ClassFile::from_reader(BufReader::new(file))?;
+            id = self.load_class_file(&class_file)?;
+        }
+        self.class_names.insert(classpath.into(), id);
+        Ok(id)
+    }
+    fn load_class_file(&mut self, class_file: &ClassFile) -> Result<u32> {
+        let mut data_size = 0;
+        let mut member_table = BTreeMap::new();
+
+        let super_class = self.load_class(class_file.constant_class(class_file.super_class).unwrap())?;
+        let interfaces: Vec<_> = class_file.interfaces
+            .iter()
+            .map(|&i| {
+                self.load_class(class_file.constant_class(i).unwrap())
+            })
+            .collect_result()?;
+
+        for i in iter::once(super_class).chain(interfaces.iter().copied()) {
+            let super_class = self.get_class(i)?;
+            data_size += super_class.get_aligned_data_size();
+        }
+        let mut fields_ordered: Vec<_> = class_file.fields.iter().map(|field| {
+            let name = class_file.constant_utf8(field.name_index).unwrap();
+            let descriptor = class_file.constant_fdescriptor(field.descriptor_index).unwrap();
+            let size: u16 = match descriptor {
+                FieldDescriptor::Boolean => 1,
+                FieldDescriptor::Byte => 1,
+                FieldDescriptor::Char => 2,
+                FieldDescriptor::Short => 2,
+                FieldDescriptor::Int => 4,
+                FieldDescriptor::Float => 4,
+                FieldDescriptor::ClassRef(_) => 4,
+                FieldDescriptor::ArrRef(_) => 4,
+                FieldDescriptor::Double => 8,
+                FieldDescriptor::Long => 8,
+            };
+            (name, size, field.access_flags.contains(FieldAccess::STATIC))
+        }).collect();
+        fields_ordered.sort_by_key(|&(_, size, _)| Reverse(size));
+
+        let mut offset = 0;
+        let mut static_size = 0;
+        for (name, size, is_static) in fields_ordered {
+            if is_static {
+                member_table.insert(name.into(), static_size);
+                static_size += size;
+            } else {
+                member_table.insert(name.into(), offset);
+                offset += size;
+            }
+        }
+        data_size += offset;
+        let mut method_code = Vec::with_capacity(class_file.methods.len());
+
+        'wasd: for method in &class_file.methods {
+            let name = class_file.constant_utf8(method.name_index).unwrap();
+            let d = class_file.constant_mdescriptor(method.descriptor_index).unwrap();
+            let id = method_code.len() as u16;
+            member_table.insert(name.into(), id);
+
+            for attrib in &method.attributes {
+                match attrib {
+                    &AttributeInfo::Code {
+                        max_stack, max_locals, ref code, exception_table: _, attributes: _
+                    } => {
+                        let code_location = self.code.as_bytes_32aligned().len();
+                        self.code.extend_from_bytes(&code.0);
+                        method_code.push(BytecodeMethod {
+                            max_stack,
+                            max_locals,
+                            arg_num: d.arg_types.iter().map(|arg| arg.unit_size() as u16).sum(),
+                            code_location,
+                        });
+                        continue 'wasd;
+                    }
+                    _ => (),
+                }
+            }
+            unimplemented!();
+        }
+
+        // load super class, first
+        let loaded = LoadedClass {
+            super_class,
+            interfaces: interfaces.into_boxed_slice(),
+            member_table,
+            runtime_info: RuntimeInfo::Bytecode {
+                method_code: method_code.into_boxed_slice(),
+                constant_pool: class_file.constant_pool.clone(),
+            },
+            static_fields: Bytes32Aligned::new_zeroed((static_size as usize + 3) & !3),
+            data_size,
+        };
+        let id = self.classes.len() as u32;
+        self.classes.push(loaded);
+        Ok(id)
+    }
+    pub fn run(&mut self, classpath: &str, args: Box<[Box<str>]>) -> Result<()> {
+        let mut ctx = RuntimeCtx {
+            frame_pointer: 0,
+            pc: 0,
+            cur_class: 0,
+            stack: Vec::new(),
+            return_stack: Vec::with_capacity(1),
+            runtime: self,
+        };
+        // TODO: generate a real array to push to the stack
+        ctx.push(Value(args.as_ptr() as usize as u32));
+        ctx.call_named(classpath, "main")?;
+        ctx.run_inner()
+    }
+}
+
+fn load_builtin(classpath: &str) -> Option<LoadedClass> {
+    Some(match classpath {
+        "java/lang/Object" => LoadedClass {
+            super_class: 0,
+            data_size: 0,
+            interfaces: Box::new([]),
+            static_fields: Bytes32Aligned::new_zeroed(0),
+            member_table: {
+                let mut table = BTreeMap::new();
+                table.insert("<init>".into(), 0);
+                table.insert("equals".into(), 1);
+                table.insert("getClass".into(), 2);
+                table.insert("hashCode".into(), 3);
+                table.insert("toString".into(), 4);
+                table
+            },
+            runtime_info: RuntimeInfo::Builtin(Box::new([
+                builtin_methods::obj_init,
+                builtin_methods::obj_equals,
+                builtin_methods::obj_get_class,
+                builtin_methods::obj_hash_code,
+                builtin_methods::obj_to_string,
+            ])),
+        },
+        "java/lang/String" => LoadedClass {
+            super_class: 0,
+            interfaces: Box::new([]),
+            static_fields: Bytes32Aligned::new_zeroed(0),
+            data_size: u16::MAX,
+            member_table: BTreeMap::new(),
+            runtime_info: RuntimeInfo::Builtin(Box::new([])),
+        },
+        "java/lang/System" => LoadedClass {
+            super_class: 0,
+            interfaces: Box::new([]),
+            static_fields: Bytes32Aligned::new_zeroed(0),
+            data_size: 0,
+            member_table: BTreeMap::new(),
+            runtime_info: RuntimeInfo::Builtin(Box::new([])),
+        },
+        "java/io/PrintStream" => LoadedClass {
+            super_class: 0,
+            interfaces: Box::new([]),
+            static_fields: Bytes32Aligned::new_zeroed(0),
+            data_size: 0,
+            member_table: BTreeMap::new(),
+            runtime_info: RuntimeInfo::Builtin(Box::new([])),
+        },
+        _ => return None,
+    })
+}
+
+#[derive(Debug)]
+pub enum RtError {
+    Io(io::Error),
+    Descriptor(DescriptorError),
+    ReservedInstruction,
+}
+
+impl From<io::Error> for RtError {
+    fn from(e: io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+impl From<DescriptorError> for RtError {
+    fn from(e: DescriptorError) -> Self {
+        Self::Descriptor(e)
+    }
+}

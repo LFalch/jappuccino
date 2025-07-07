@@ -3,7 +3,7 @@ use std::{fmt::{self, Debug, Display}, io::{self, Read}};
 use bitflags::bitflags;
 use collect_result::CollectResult;
 
-use crate::{code::Code, modified_utf8::read_modified_utf8, ReadIntExt};
+use crate::{code::Code, descriptor::{FieldDescriptor, MethodDescriptor}, modified_utf8::read_modified_utf8, ReadIntExt};
 
 pub type ConstIndex = u16;
 
@@ -20,6 +20,30 @@ pub struct ClassFile {
     pub fields: Box<[Field]>,
     pub methods: Box<[Method]>,
     pub attributes: Box<[AttributeInfo]>,
+}
+
+impl ClassFile {
+    pub fn constant(&self, n: ConstIndex) -> &Constant {
+        &self.constant_pool[(n - 1) as usize]
+    }
+    pub fn constant_utf8(&self, n: ConstIndex) -> Option<&str> {
+        match *self.constant(n) {
+            Constant::Utf8(ref s) => Some(s),
+            _ => None,
+        }
+    }
+    pub fn constant_class(&self, n: ConstIndex) -> Option<&str> {
+        match *self.constant(n) {
+            Constant::Class{name_index} => self.constant_utf8(name_index),
+            _ => None,
+        }
+    }
+    pub fn constant_fdescriptor(&self, n: ConstIndex) -> Option<FieldDescriptor> {
+        FieldDescriptor::from_bytes(self.constant_utf8(n)?.as_bytes()).ok()
+    }
+    pub fn constant_mdescriptor(&self, n: ConstIndex) -> Option<MethodDescriptor> {
+        MethodDescriptor::from_bytes(self.constant_utf8(n)?.as_bytes()).ok()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

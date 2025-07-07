@@ -77,16 +77,30 @@ impl FieldDescriptor {
             FieldDescriptor::ArrRef(f) => 1 + f.length(),
         }
     }
+    pub fn unit_size(&self) -> usize {
+        match self {
+            FieldDescriptor::Byte |
+            FieldDescriptor::Char |
+            FieldDescriptor::Float |
+            FieldDescriptor::Int |
+            FieldDescriptor::Short |
+            FieldDescriptor::ClassRef(_) |
+            FieldDescriptor::ArrRef(_) |
+            FieldDescriptor::Boolean => 1,
+            FieldDescriptor::Double |
+            FieldDescriptor::Long => 2,
+        }
+    }
     pub fn display_type<'a>(&'a self) -> DisplayType<'a> {
         DisplayType(self)
     } 
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MethodDescriptor {
-    // ( fd* )
-    arg_types: Box<[FieldDescriptor]>,
-    // None is V (for void)
-    return_type: Option<Box<FieldDescriptor>>,
+    /// ( fd* )
+    pub arg_types: Box<[FieldDescriptor]>,
+    /// None is V (for void)
+    pub return_type: Option<Box<FieldDescriptor>>,
 }
 impl MethodDescriptor {
     pub fn from_bytes(mut bytes: &[u8]) -> Result<Self, DescriptorError> {

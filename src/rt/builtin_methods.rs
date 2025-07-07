@@ -1,0 +1,27 @@
+use crate::rt::RuntimeCtx;
+
+pub fn obj_init(ctx: &mut RuntimeCtx) {
+    let _this = ctx.pop();
+}
+pub fn obj_equals(ctx: &mut RuntimeCtx) {
+    let this = ctx.pop();
+    let obj = ctx.pop();
+    ctx.push(this == obj);
+}
+pub fn obj_get_class(ctx: &mut RuntimeCtx) {
+    let this = ctx.pop();
+    let class_instance = ctx.get_class_object(this);
+    ctx.push(class_instance);
+}
+pub fn obj_hash_code(ctx: &mut RuntimeCtx) {
+    let this = ctx.pop();
+    ctx.push(this);
+}
+pub fn obj_to_string(ctx: &mut RuntimeCtx) {
+    let this = ctx.pop();
+    let hash_code = this.as_u32();
+    let class_name = ctx.get_class_name(this);
+
+    let string = ctx.new_string_obj(format!("{class_name}@{hash_code:x}"));
+    ctx.push(string);
+}
