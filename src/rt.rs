@@ -1,4 +1,4 @@
-use std::{cmp::Reverse, collections::BTreeMap, fs::File, io::{self, BufReader}, iter, path::Path};
+use std::{cmp::Reverse, collections::BTreeMap, fs::File, io::{self, BufReader}, iter, mem::transmute, path::Path, str::from_utf8_unchecked};
 
 use crate::{class::{AttributeInfo, ClassFile, ConstIndex, Constant, FieldAccess}, code::opcode::Opcode, descriptor::{DescriptorError, FieldDescriptor, MethodDescriptor}};
 
@@ -17,6 +17,8 @@ pub struct RuntimeCtx<'a> {
     return_stack: Vec<(u32, u32, usize)>,
     frame_pointer: u32,
     cur_class: u32,
+
+    heap: Vec<u32>,
 
     pc: usize,
 }
@@ -115,16 +117,79 @@ impl RuntimeCtx<'_> {
             }
         }
     }
-    fn read_constant(&self, n: ConstIndex) -> &Constant {
+    fn read_constant(&self, n: ConstIndex) -> RuntimeConstant {
         match &self.runtime.classes[self.cur_class as usize].runtime_info {
             RuntimeInfo::Bytecode { constant_pool, .. } => {
-                &constant_pool[n as usize - 1]
+                constant_pool[n as usize - 1]
             }
             _ => unimplemented!(),
         }
     }
-    fn new(&mut self, n: u32) -> Value {
-        Value(n << 12 - n)
+    fn new(&mut self, class_id: u32) -> Value {
+        let size = self.runtime.get_class(class_id).get_aligned_data_size();
+        let i = self.heap.as_bytes_32aligned().len();
+        for _ in 0..size/4 {
+            self.heap.push(0);
+        }
+        Value::new_ref_heap(i as u32)
+    }
+    fn read_u8_ref(&self, ptr: Value) -> Option<u8> {
+        Some(match ptr.into_ref() {
+            Reference::Invalid => return None,
+            Reference::Heap(offset) => self.heap.as_bytes_32aligned()[offset as usize],
+            Reference::Static(offset) => self.runtime.statics.as_bytes_32aligned()[offset as usize],
+        })
+    }
+    fn read_u16_ref(&self, ptr: Value) -> Option<u16> {
+        debug_assert_eq!(ptr.into_u32() & 1, 0);
+        let ptr = match ptr.into_ref() {
+            Reference::Invalid => return None,
+            Reference::Heap(offset) => &self.heap.as_bytes_32aligned()[offset as usize],
+            Reference::Static(offset) => &self.runtime.statics.as_bytes_32aligned()[offset as usize],
+        };
+        Some(unsafe {*(ptr as *const u8 as *const u16)})
+    }
+    fn read_u32_ref(&self, ptr: Value) -> Option<u32> {
+        Some(match ptr.into_ref() {
+            Reference::Invalid => return None,
+            Reference::Heap(offset) => {
+                debug_assert_eq!(offset & 3, 0);
+                self.heap[offset as usize / 4]
+            }
+            Reference::Static(offset) => {
+                debug_assert_eq!(offset & 3, 0);
+                self.runtime.statics[offset as usize / 4]
+            }
+        })
+    }
+    fn write_u8_ref(&mut self, ptr: Value, val: u8) {
+        match ptr.into_ref() {
+            Reference::Invalid => unimplemented!(),
+            Reference::Heap(offset) => self.heap.as_bytes_32aligned_mut()[offset as usize] = val,
+            Reference::Static(offset) => self.runtime.statics.as_bytes_32aligned_mut()[offset as usize] = val,
+        }
+    }
+    fn write_u16_ref(&mut self, ptr: Value, val: u16) {
+        debug_assert_eq!(ptr.into_u32() & 1, 0);
+        let ptr = match ptr.into_ref() {
+            Reference::Invalid => unimplemented!(),
+            Reference::Heap(offset) => &mut self.heap.as_bytes_32aligned_mut()[offset as usize],
+            Reference::Static(offset) => &mut self.runtime.statics.as_bytes_32aligned_mut()[offset as usize],
+        };
+        unsafe {*(ptr as *mut u8 as *mut u16) = val};
+    }
+    fn write_u32_ref(&mut self, ptr: Value, val: u32) {
+        match ptr.into_ref() {
+            Reference::Invalid => unimplemented!(),
+            Reference::Heap(offset) => {
+                debug_assert_eq!(offset & 3, 0);
+                self.heap[offset as usize / 4] = val;
+            }
+            Reference::Static(offset) => {
+                debug_assert_eq!(offset & 3, 0);
+                self.runtime.statics[offset as usize / 4] = val;
+            }
+        }
     }
     fn decode_opcode(&mut self) -> Opcode {
         let code = self.runtime.code.as_bytes_32aligned();
@@ -148,23 +213,29 @@ impl RuntimeCtx<'_> {
         while !self.return_stack.is_empty() {
             match self.decode_opcode() {
                 Opcode::Nop => (),
-                Opcode::AconstNull => todo!(),
-                Opcode::IconstM1 => todo!(),
-                Opcode::Iconst0 => todo!(),
-                Opcode::Iconst1 => todo!(),
-                Opcode::Iconst2 => todo!(),
-                Opcode::Iconst3 => todo!(),
-                Opcode::Iconst4 => todo!(),
-                Opcode::Iconst5 => todo!(),
-                Opcode::Lconst0 => todo!(),
-                Opcode::Lconst1 => todo!(),
-                Opcode::Fconst0 => todo!(),
-                Opcode::Fconst1 => todo!(),
-                Opcode::Fconst2 => todo!(),
-                Opcode::Dconst0 => todo!(),
-                Opcode::Dconst1 => todo!(),
-                Opcode::Bipush => todo!(),
-                Opcode::Sipush => todo!(),
+                Opcode::AconstNull |
+                Opcode::Iconst0 => self.push(0),
+                Opcode::IconstM1 => self.push(-1),
+                Opcode::Iconst1 => self.push(1),
+                Opcode::Iconst2 => self.push(2),
+                Opcode::Iconst3 => self.push(3),
+                Opcode::Iconst4 => self.push(4),
+                Opcode::Iconst5 => self.push(5),
+                Opcode::Lconst0 => self.push2(i64_into_values(0)),
+                Opcode::Lconst1 => self.push2(i64_into_values(1)),
+                Opcode::Fconst0 => self.push(0.),
+                Opcode::Fconst1 => self.push(1.),
+                Opcode::Fconst2 => self.push(2.),
+                Opcode::Dconst0 => self.push2(f64_into_values(0.)),
+                Opcode::Dconst1 => self.push2(f64_into_values(1.)),
+                Opcode::Bipush => {
+                    let imm = self.decode_u8() as i8;
+                    self.push(imm);
+                }
+                Opcode::Sipush => {
+                    let imm = self.decode_u16() as i16;
+                    self.push(imm);
+                }
                 Opcode::Ldc => todo!(),
                 Opcode::LdcW => todo!(),
                 Opcode::Ldc2W => todo!(),
@@ -225,14 +296,51 @@ impl RuntimeCtx<'_> {
                     let val = self.get_local2(3);
                     self.push2(val);
                 }
-                Opcode::Iaload => todo!(),
-                Opcode::Laload => todo!(),
-                Opcode::Faload => todo!(),
-                Opcode::Daload => todo!(),
-                Opcode::Aaload => todo!(),
-                Opcode::Baload => todo!(),
-                Opcode::Caload => todo!(),
-                Opcode::Saload => todo!(),
+                Opcode::Faload |
+                Opcode::Iaload |
+                Opcode::Aaload => {
+                    let index = self.pop().into_u32();
+                    let arr_ref = self.pop();
+                    let length = self.read_u32_ref(arr_ref).unwrap();
+                    if index >= length {
+                        unimplemented!("out of bounds");
+                    }
+                    let val = self.read_u32_ref(arr_ref.offset(4*index)).unwrap();
+                    self.push(Value(val));
+                }
+                Opcode::Laload |
+                Opcode::Daload => {
+                    let index = self.pop().into_u32();
+                    let arr_ref = self.pop();
+                    let length = self.read_u32_ref(arr_ref).unwrap();
+                    if index >= length {
+                        unimplemented!("out of bounds");
+                    }
+                    let val1 = self.read_u32_ref(arr_ref.offset(4*index)).unwrap();
+                    let val2 = self.read_u32_ref(arr_ref.offset(4*index+4)).unwrap();
+                    self.push2((Value(val1), Value(val2)));
+                }
+                Opcode::Baload => {
+                    let index = self.pop().into_u32();
+                    let arr_ref = self.pop();
+                    let length = self.read_u32_ref(arr_ref).unwrap();
+                    if index >= length {
+                        unimplemented!("out of bounds");
+                    }
+                    let val = self.read_u8_ref(arr_ref.offset(index)).unwrap();
+                    self.push(val as i8);
+                }
+                Opcode::Caload |
+                Opcode::Saload => {
+                    let index = self.pop().into_u32();
+                    let arr_ref = self.pop();
+                    let length = self.read_u32_ref(arr_ref).unwrap();
+                    if index >= length {
+                        unimplemented!("out of bounds");
+                    }
+                    let val = self.read_u16_ref(arr_ref.offset(index)).unwrap();
+                    self.push(val as i16);
+                }
                 Opcode::Istore => todo!(),
                 Opcode::Lstore => todo!(),
                 Opcode::Fstore => todo!(),
@@ -360,39 +468,69 @@ impl RuntimeCtx<'_> {
                 Opcode::Getstatic => todo!(),
                 Opcode::Putstatic => todo!(),
                 Opcode::Getfield => todo!(),
-                Opcode::Putfield => todo!(),
+                Opcode::Putfield => {
+                    let cpn = self.decode_u16();
+                    let (class_index, name_and_type_index) = self.read_constant(cpn).fieldref();
+                    let class = self.read_constant(self.read_constant(class_index).class()).utf8();
+                    let (name, field_type) = self.read_constant(name_and_type_index).nameandtype();
+                    let name = self.read_constant(name).utf8();
+                    let field_type = self.read_constant(field_type).utf8();
+                    let field_type = FieldDescriptor::from_bytes(self.runtime.read_static_string(field_type).as_bytes())?;
+
+                    let offset = {
+                        let class = self.runtime.read_static_string(class).to_string();
+                        let class = self.runtime.load_class(&class)?;
+                        let class = self.runtime.get_class(class);
+                        let name = self.runtime.read_static_string(name);
+                        class.member_table[name]
+                    };
+
+                    match field_type {
+                        FieldDescriptor::Boolean |
+                        FieldDescriptor::Byte => {
+                            let value = self.pop().into_u8();
+                            let object_ref = self.pop();
+                            self.write_u8_ref(object_ref.offset(offset as u32), value);
+                        }
+                        FieldDescriptor::Char |
+                        FieldDescriptor::Short => {
+                            let value = self.pop().into_u16();
+                            let object_ref = self.pop();
+                            self.write_u16_ref(object_ref.offset(offset as u32), value);
+                        }
+                        FieldDescriptor::ClassRef(_) |
+                        FieldDescriptor::ArrRef(_) |
+                        FieldDescriptor::Float |
+                        FieldDescriptor::Int => {
+                            let value = self.pop().into_u32();
+                            let object_ref = self.pop();
+                            self.write_u32_ref(object_ref.offset(offset as u32), value);
+                        }
+                        FieldDescriptor::Double |
+                        FieldDescriptor::Long => {
+                            let v2 = self.pop().into_u32();
+                            let v1 = self.pop().into_u32();
+                            let object_ref = self.pop();
+                            self.write_u32_ref(object_ref.offset(offset as u32), v1);
+                            self.write_u32_ref(object_ref.offset(offset as u32 + 4), v2);
+                        }
+                    }
+                }
                 Opcode::Invokevirtual |
                 Opcode::Invokespecial => {
                     let cpn = self.decode_u16();
-                    let class_name;
-                    let name_and_type;
-                    match self.read_constant(cpn) {
-                        &Constant::Methodref { class_index, name_and_type_index } => {
-                            class_name = match self.read_constant(class_index) {
-                                &Constant::Class { name_index } => match self.read_constant(name_index) {
-                                    Constant::Utf8(name) => name.clone(),
-                                    _ => unimplemented!(),
-                                }
-                                _ => unimplemented!(),
-                            };
-                            name_and_type = match self.read_constant(name_and_type_index) {
-                                &Constant::NameAndType { name_index, descriptor_index } => (
-                                    match self.read_constant(name_index) {
-                                        Constant::Utf8(name) => name.clone(),
-                                        _ => unimplemented!(),
-                                    },
-                                    match self.read_constant(descriptor_index) {
-                                        Constant::Utf8(name) => MethodDescriptor::from_bytes(name.as_bytes())?,
-                                        _ => unimplemented!(),
-                                    },
-                                ),
-                                _ => unimplemented!(),
-                            };
-                        }
-                        _ => unimplemented!(),
-                    }
-                    let (name, method_type) = name_and_type;
+                    let (class_index, name_and_type_index) = self.read_constant(cpn).methodref();
+                    let class_name = self.read_constant(self.read_constant(class_index).class()).utf8();
+                    let class_name = self.runtime.read_static_string(class_name);
+                    let (name_index, descriptor_index) = self.read_constant(name_and_type_index).nameandtype();
+                    let name = self.read_constant(name_index).utf8();
+                    let name = self.runtime.read_static_string(name);
+                    let method_type = self.read_constant(descriptor_index).utf8();
+                    let method_type = self.runtime.read_static_string(method_type);
+                    let method_type = MethodDescriptor::from_bytes(method_type.as_bytes())?;
                     eprintln!("Invoking {class_name} {}", method_type.display_type(&name));
+                    let class_name = class_name.to_string(); // TODO: bad
+                    let name = name.to_string(); // TODO: bad
                     self.call_named(&class_name, &name)?;
                 }
                 Opcode::Invokestatic => todo!(),
@@ -400,13 +538,9 @@ impl RuntimeCtx<'_> {
                 Opcode::Invokedynamic => todo!(),
                 Opcode::New => {
                     let cpn = self.decode_u16();
-                    let class_name = match self.read_constant(cpn) {
-                        &Constant::Class { name_index } => match self.read_constant(name_index) {
-                            Constant::Utf8(name) => name.clone(),
-                            _ => unimplemented!(),
-                        }
-                        _ => unimplemented!(),
-                    };
+                    let class_name = self.read_constant(self.read_constant(cpn).class()).utf8();
+                    let class_name = self.runtime.read_static_string(class_name);
+                    let class_name = class_name.to_string(); // TODO: bad
                     let id = self.runtime.load_class(&class_name)?;
                     let r = self.new(id);
                     self.push(r);
@@ -445,9 +579,48 @@ pub enum ReturnCategory {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Value(u32);
 impl Value {
-    pub fn as_u32(self) -> u32 {
+    pub fn into_u32(self) -> u32 {
         self.0
     }
+    pub fn into_u8(self) -> u8 {
+        self.0 as u8
+    }
+    pub fn into_u16(self) -> u16 {
+        self.0 as u16
+    }
+    pub const fn new_ref_static(n: u32) -> Self {
+        Self(4 + n)
+    }
+    pub const fn new_ref_heap(n: u32) -> Self {
+        Self(0x8000_0000 + n)
+    }
+    pub const fn into_ref(self) -> Reference {
+        if self.0 < 4 {
+            Reference::Invalid
+        } else if self.0 < 0x8000_0000 {
+            Reference::Static(self.0 - 4)
+        } else {
+            Reference::Heap(self.0 - 0x8000_0000)
+        }
+    }
+    pub const fn offset(self, offset: u32) -> Value {
+        Value(self.0 + offset)
+    }
+}
+fn values_into_u64(value: (Value, Value)) -> u64 {
+    unsafe { transmute(value) }
+}
+fn i64_into_values(value: i64) -> (Value, Value) {
+    unsafe { transmute(value) }
+}
+fn f64_into_values(value: f64) -> (Value, Value) {
+    unsafe { transmute(value.to_bits()) }
+}
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum Reference {
+    Invalid,
+    Heap(u32),
+    Static(u32),
 }
 impl From<bool> for Value {
     fn from(value: bool) -> Self {
@@ -469,17 +642,63 @@ impl From<i32> for Value {
         Value(value as u32)
     }
 }
+impl From<f32> for Value {
+    fn from(value: f32) -> Self {
+        Value(value.to_bits())
+    }
+}
 
-#[derive(Debug, Clone)]
-// TODO: use this instead of `Constant` for the runtime constant pool
-#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
 pub struct RuntimeConstant(u32);
+impl RuntimeConstant {
+    pub const fn class(self) -> ConstIndex {
+        self.0 as ConstIndex
+    }
+    pub const fn fieldref(self) -> (ConstIndex, ConstIndex) {
+        unsafe { transmute(self.0) }
+    }
+    pub const fn methodref(self) -> (ConstIndex, ConstIndex) {
+        unsafe { transmute(self.0) }
+    }
+    pub const fn interfacemethodref(self) -> (ConstIndex, ConstIndex) {
+        unsafe { transmute(self.0) }
+    }
+    pub const fn string(self) -> ConstIndex {
+        self.0 as ConstIndex
+    }
+    pub const fn integer(self) -> i32 {
+        self.0 as i32
+    }
+    pub const fn float(self) -> f32 {
+        f32::from_bits(self.0)
+    }
+    pub const fn nameandtype(self) -> (ConstIndex, ConstIndex) {
+        unsafe { transmute(self.0) }
+    }
+    pub const fn utf8(self) -> u32 {
+        self.0
+    }
+    pub const fn methodhandle(self) -> (u8, ConstIndex) {
+        unsafe { transmute(self.0) }
+    }
+    pub const fn methodtype(self) -> ConstIndex {
+        self.0 as ConstIndex
+    }
+    pub const fn invokedynamic(self) -> (ConstIndex, ConstIndex) {
+        unsafe { transmute(self.0) }
+    }
+    pub const fn module(self) -> ConstIndex {
+        self.0 as ConstIndex
+    }pub const fn package(self) -> ConstIndex {
+        self.0 as ConstIndex
+    }
+}
 #[derive(Debug, Clone)]
 enum RuntimeInfo {
     Builtin(Box<[fn(&mut RuntimeCtx)]>),
     Bytecode {
         method_code: Box<[BytecodeMethod]>,
-        constant_pool: Box<[Constant]>,
+        constant_pool: Box<[RuntimeConstant]>,
     }
 }
 #[derive(Debug, Clone)]
@@ -523,6 +742,7 @@ pub struct Runtime {
     class_names: BTreeMap<Box<str>, u32>,
     classes: Vec<LoadedClass>,
     code: Vec<u32>,
+    statics: Vec<u32>,
 }
 impl Runtime {
     pub fn new() -> Self {
@@ -531,11 +751,12 @@ impl Runtime {
         Self {
             class_names,
             code: Vec::new(),
+            statics: Vec::new(),
             classes: vec![load_builtin("java/lang/Object").unwrap()],
         }
     }
-    fn get_class(&mut self, id: u32) -> Result<&LoadedClass> {
-        Ok(&self.classes[id as usize])
+    fn get_class(&self, id: u32) -> &LoadedClass {
+        &self.classes[id as usize]
     }
     /// The class path should separate packages with slashes (`/`)
     pub fn load_class(&mut self, classpath: &str) -> Result<u32> {
@@ -570,7 +791,7 @@ impl Runtime {
             .collect_result()?;
 
         for i in iter::once(super_class).chain(interfaces.iter().copied()) {
-            let super_class = self.get_class(i)?;
+            let super_class = self.get_class(i);
             data_size += super_class.get_aligned_data_size();
         }
         let mut fields_ordered: Vec<_> = class_file.fields.iter().map(|field| {
@@ -633,6 +854,48 @@ impl Runtime {
             unimplemented!();
         }
 
+        let mut gap_val = None;
+        let constant_pool = class_file.constant_pool
+            .iter()
+            .map(|c| {
+                match *c {
+                    Constant::Fieldref { class_index: a, name_and_type_index: b } |
+                    Constant::Methodref { class_index: a, name_and_type_index: b } |
+                    Constant::NameAndType { name_index: a, descriptor_index: b } |
+                    Constant::Dynamic { bootstrap_method_attr_index: a, name_and_type_index: b } |
+                    Constant::InvokeDynamic { bootstrap_method_attr_index: a, name_and_type_index: b } |
+                    Constant::InterfaceMethodref { class_index: a, name_and_type_index: b } => unsafe {
+                        RuntimeConstant(transmute((a, b)))
+                    }
+                    Constant::MethodHandle { reference_kind: a, reference_index: b } => unsafe {
+                        RuntimeConstant(transmute((a, b)))
+                    }
+                    Constant::Class { name_index: a } |
+                    Constant::MethodType { descriptor_index: a } |
+                    Constant::Module { name_index: a } |
+                    Constant::Package { name_index: a } |
+                    Constant::String { string_index: a } => RuntimeConstant(a as u32),
+                    Constant::Integer { bytes } |
+                    Constant::Float { bytes } => RuntimeConstant(bytes),
+                    Constant::Double { high_bytes, low_bytes } |
+                    Constant::Long { high_bytes, low_bytes } => {
+                        if cfg!(target_endian = "little") {
+                            gap_val = Some(high_bytes);
+                            RuntimeConstant(low_bytes)
+                        } else {
+                            gap_val = Some(high_bytes);
+                            RuntimeConstant(low_bytes)
+                        }
+                    }
+                    Constant::Utf8(ref s) => {
+                        let offset = self.new_static_string_obj(s);
+                        RuntimeConstant(offset)
+                    }
+                    Constant::Gap => RuntimeConstant(gap_val.take().unwrap())
+                }
+            })
+            .collect();
+
         // load super class, first
         let loaded = LoadedClass {
             super_class,
@@ -640,7 +903,7 @@ impl Runtime {
             member_table,
             runtime_info: RuntimeInfo::Bytecode {
                 method_code: method_code.into_boxed_slice(),
-                constant_pool: class_file.constant_pool.clone(),
+                constant_pool,
             },
             static_fields: Bytes32Aligned::new_zeroed((static_size as usize + 3) & !3),
             data_size,
@@ -649,12 +912,26 @@ impl Runtime {
         self.classes.push(loaded);
         Ok(id)
     }
+    pub fn new_static_string_obj(&mut self, s: &str) -> u32 {
+        let string_location = self.statics.as_bytes_32aligned().len();
+        self.statics.push(s.len() as u32);
+        self.statics.extend_from_bytes(s.as_bytes());
+        string_location as u32
+    }
+    pub fn read_static_string(&self, offset: u32) -> &str {
+        let len = self.statics[offset as usize / 4];
+        let bytes = &self.statics.as_bytes_32aligned()[offset as usize + 4..][..len as usize];
+        unsafe {
+            from_utf8_unchecked(bytes)
+        }
+    }
     pub fn run(&mut self, classpath: &str, args: Box<[Box<str>]>) -> Result<()> {
         let mut ctx = RuntimeCtx {
             frame_pointer: 0,
             pc: 0,
             cur_class: 0,
             stack: Vec::new(),
+            heap: Vec::new(),
             return_stack: Vec::with_capacity(1),
             runtime: self,
         };

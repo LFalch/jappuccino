@@ -19,7 +19,7 @@ pub fn obj_hash_code(ctx: &mut RuntimeCtx) {
 }
 pub fn obj_to_string(ctx: &mut RuntimeCtx) {
     let this = ctx.pop();
-    let hash_code = this.as_u32();
+    let hash_code = this.into_u32();
     let class_name = ctx.get_class_name(this);
 
     let string = ctx.new_string_obj(format!("{class_name}@{hash_code:x}"));

@@ -190,12 +190,20 @@ fn print_constant(constant: &Constant, constant_pool: &[Constant]) {
             print!("MethodType ");
             print_method_descriptor("", descriptor_index, constant_pool);
         }
+        Constant::Dynamic {
+            bootstrap_method_attr_index,
+            name_and_type_index,
+        } => {
+            print!("Dynamic bootstrap_method_attr = {bootstrap_method_attr_index} ");
+            print_cpn(name_and_type_index, constant_pool);
+        },
         Constant::InvokeDynamic {
             bootstrap_method_attr_index,
             name_and_type_index,
-        } => println!(
-            "InvokeDynamic bootstrap_method_attr = {bootstrap_method_attr_index} name_and_type = {name_and_type_index}"
-        ),
+        } => {
+            print!("InvokeDynamic bootstrap_method_attr = {bootstrap_method_attr_index} ");
+            print_cpn(name_and_type_index, constant_pool);
+        },
         Constant::Module { name_index } => {
             print!("Module ");
             print_cpn(name_index, constant_pool);

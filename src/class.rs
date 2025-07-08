@@ -92,6 +92,10 @@ pub enum Constant {
     MethodType {
         descriptor_index: ConstIndex,
     },
+    Dynamic {
+        bootstrap_method_attr_index: ConstIndex,
+        name_and_type_index: ConstIndex,
+    },
     InvokeDynamic {
         bootstrap_method_attr_index: ConstIndex,
         name_and_type_index: ConstIndex,
@@ -157,9 +161,13 @@ impl Constant {
             16 => Self::MethodType {
                 descriptor_index: reader.read_u16()?,
             },
-            18 => Self::InvokeDynamic {
-                name_and_type_index: reader.read_u16()?,
+            17 => Self::Dynamic {
                 bootstrap_method_attr_index: reader.read_u16()?,
+                name_and_type_index: reader.read_u16()?,
+            },
+            18 => Self::InvokeDynamic {
+                bootstrap_method_attr_index: reader.read_u16()?,
+                name_and_type_index: reader.read_u16()?,
             },
             19 => Self::Module {
                 name_index: reader.read_u16()?,
@@ -257,7 +265,7 @@ pub enum AttributeInfo {
     },
     StackMapTable(Box<[StackMapFrame]>),
     Exceptions(RawBytes),
-    InnerClasses(RawBytes),
+    InnerClasses(Box<[InnerClass]>),
     EnclosingMethod(RawBytes),
     Synthetic(RawBytes),
     Signature(RawBytes),
@@ -276,7 +284,7 @@ pub enum AttributeInfo {
     RuntimeVisibleTypeAnnotations(RawBytes),
     RuntimeInvisibleTypeAnnotations(RawBytes),
     AnnotationDefault(RawBytes),
-    BootstrapMethods(RawBytes),
+    BootstrapMethods(Box<[BootstrapMethod]>),
     NestHost(RawBytes),
     NestMembers(RawBytes),
     PermittedSubclasses(RawBytes),
@@ -335,7 +343,18 @@ impl AttributeInfo {
                 entries.into_boxed_slice()
             }),
             "Exceptions" => Self::Exceptions(RawBytes(info)),
-            "InnerClasses" => Self::InnerClasses(RawBytes(info)),
+            "InnerClasses" => Self::InnerClasses({
+                let number_of_classes = reader.read_u16()?;
+                let classes: Vec<_> = (0..number_of_classes).map(|_| -> io::Result<_> {
+                    Ok(InnerClass {
+                        inner_class_info_index: reader.read_u16()?,
+                        outer_class_info_index: reader.read_u16()?,
+                        inner_name_index: reader.read_u16()?,
+                        inner_class_access_flags: InnerClassAccess::from_bits_retain(reader.read_u16()?),
+                    })
+                }).collect_result()?;
+                classes.into_boxed_slice()
+            }),
             "EnclosingMethod" => Self::EnclosingMethod(RawBytes(info)),
             "Synthetic" => Self::Synthetic(RawBytes(info)),
             "Signature" => Self::Signature(RawBytes(info)),
@@ -375,7 +394,22 @@ impl AttributeInfo {
             "RuntimeVisibleTypeAnnotations" => Self::RuntimeVisibleTypeAnnotations(RawBytes(info)),
             "RuntimeInvisibleTypeAnnotations" => Self::RuntimeInvisibleTypeAnnotations(RawBytes(info)),
             "AnnotationDefault" => Self::AnnotationDefault(RawBytes(info)),
-            "BootstrapMethods" => Self::BootstrapMethods(RawBytes(info)),
+            "BootstrapMethods" => Self::BootstrapMethods({
+                let num_bootstrap_methods = reader.read_u16()?;
+                let bootstrap_methods: Vec<_> = (0..num_bootstrap_methods).map(|_| -> io::Result<_> {
+                    Ok(BootstrapMethod {
+                        bootstrap_method_ref: reader.read_u16()?,
+                        bootstrap_arguments: {
+                            let num_bootstrap_arguments = reader.read_u16()?;
+                            (0..num_bootstrap_arguments)
+                                .map(|_| reader.read_u16())
+                                .collect_result::<Vec<_>>()?
+                                .into_boxed_slice()
+                        }
+                    })
+                }).collect_result()?;
+                bootstrap_methods.into_boxed_slice()
+            }),
             "NestHost" => Self::NestHost(RawBytes(info)),
             "NestMembers" => Self::NestMembers(RawBytes(info)),
             "PermittedSubclasses" => Self::PermittedSubclasses(RawBytes(info)),
@@ -519,6 +553,18 @@ impl StackMapFrame {
         })
     }
 }
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InnerClass {
+    inner_class_info_index: ConstIndex,
+    outer_class_info_index: ConstIndex,
+    inner_name_index: ConstIndex,
+    inner_class_access_flags: InnerClassAccess,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct BootstrapMethod {
+    bootstrap_method_ref: ConstIndex,
+    bootstrap_arguments: Box<[ConstIndex]>,
+}
 #[derive(Clone, PartialEq)]
 pub struct RawBytes(pub Box<[u8]>);
 impl Debug for RawBytes {
@@ -568,7 +614,20 @@ bitflags! {
         const SYNTHETIC = 0x1000;
         const ANNOTATION = 0x2000;
         const ENUM = 0x4000;
-        const MODUKE = 0x8000;
+        const MODULE = 0x8000;
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct InnerClassAccess: u16 {
+        const PUBLIC = 0x0001;
+        const PRIVATE = 0x0002;
+        const PROTECTED = 0x0004;
+        const STATIC = 0x0008;
+        const FINAL = 0x0010;
+        const INTERFACE = 0x0200;
+        const ABSTRACT = 0x0400;
+        const SYNTHETIC = 0x1000;
+        const ANNOTATION = 0x2000;
+        const ENUM = 0x4000;
     }
 }
 impl Display for FieldAccess {
