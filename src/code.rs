@@ -2,6 +2,8 @@ use std::fmt::{self, Display};
 
 use num_enum::{TryFromPrimitive, FromPrimitive, IntoPrimitive};
 
+use crate::class::{display_constant, Constant};
+
 use self::opcode::Opcode;
 
 pub mod opcode;
@@ -9,6 +11,18 @@ pub mod opcode;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Code(pub Box<[u8]>);
 
+pub struct DisplayCode<'a>{
+    raw_code: &'a [u8],
+    constant_pool: &'a [Constant],
+    ident: usize,
+}
+pub fn display_code<'a>(raw_code: &'a [u8], constant_pool: &'a [Constant], ident: usize) -> DisplayCode<'a> {
+    DisplayCode {
+        raw_code,
+        constant_pool,
+        ident,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
@@ -23,20 +37,20 @@ enum PrimitiveArrayType {
     Long = 11,
 }
 
-impl Display for Code {
+impl Display for DisplayCode<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.0.is_empty() { return Ok(()) }
+        if self.raw_code.is_empty() { return Ok(()) }
 
-        let mut bytes = self.0.iter().copied().enumerate();
-        let indent = f.precision().unwrap_or(0);
+        let mut bytes = self.raw_code.iter().copied().enumerate();
+        let indent = self.ident;
         // :( allocation
         let indent = " ".repeat(indent);
-        let pc_width_max = (self.0.len().ilog10() + 1) as usize;
+        let pc_width_max = (self.raw_code.len().ilog10() + 1) as usize;
 
         while let Some((i, opcode)) = bytes.next() {
             let opcode = Opcode::from_primitive(opcode);
             write!(f, "{indent}{i: >pc_width_max$}: {}", opcode.mnemonic())?;
-            display_arg(opcode, f, &mut bytes, i)?;
+            display_arg(opcode, f, &mut bytes, i, self.constant_pool)?;
             writeln!(f)?;
         }
         Ok(())
@@ -67,11 +81,12 @@ fn display_arg_short(f: &mut fmt::Formatter<'_>, bytes: &mut impl Iterator<Item=
     };
     write!(f, " {short}")
 }
-fn display_arg_const_index(f: &mut fmt::Formatter<'_>, bytes: &mut impl Iterator<Item=(usize, u8)>) -> fmt::Result {
+fn display_arg_const_index(f: &mut fmt::Formatter<'_>, bytes: &mut impl Iterator<Item=(usize, u8)>, constant_pool: &[Constant]) -> fmt::Result {
     let Some((_, index)) = extract_u16(bytes) else {
         return Ok(());
     };
-    write!(f, " #{index}")
+    write!(f, " #{index}")?;
+    display_const_as_comment(f, index, constant_pool)
 }
 fn display_arg_branch_offset(f: &mut fmt::Formatter<'_>, bytes: &mut impl Iterator<Item=(usize, u8)>) -> fmt::Result {
     let Some((s, offset)) = extract_u16(bytes) else {
@@ -87,14 +102,17 @@ fn display_arg_branch_offset_w(f: &mut fmt::Formatter<'_>, bytes: &mut impl Iter
     let target = (s as u32 - 1).wrapping_add(offset);
     write!(f, " .{target}")
 }
-fn display_arg_const_index_byte(f: &mut fmt::Formatter<'_>, bytes: &mut impl Iterator<Item=(usize, u8)>) -> fmt::Result {
+fn display_arg_const_index_byte(f: &mut fmt::Formatter<'_>, bytes: &mut impl Iterator<Item=(usize, u8)>, constant_pool: &[Constant]) -> fmt::Result {
     let Some((_, index)) = bytes.next() else {
         return Ok(());
     };
-    write!(f, " #{index}")
+    write!(f, " #{index}")?;
+    display_const_as_comment(f, index as u16, constant_pool)
 }
-
-fn display_arg(opcode: Opcode, f: &mut fmt::Formatter<'_>, bytes: &mut impl Iterator<Item=(usize, u8)>, i: usize) -> fmt::Result {
+fn display_const_as_comment(f: &mut fmt::Formatter<'_>, index: u16, constant_pool: &[Constant]) -> fmt::Result {
+    write!(f, " \t// {}", display_constant(index as u16, constant_pool))
+}
+fn display_arg(opcode: Opcode, f: &mut fmt::Formatter<'_>, bytes: &mut impl Iterator<Item=(usize, u8)>, i: usize, constant_pool: &[Constant]) -> fmt::Result {
     use Opcode::*;
     match opcode {
         Nop |
@@ -247,7 +265,7 @@ fn display_arg(opcode: Opcode, f: &mut fmt::Formatter<'_>, bytes: &mut impl Iter
         Anewarray |
         Checkcast |
         Instanceof |
-        New | Invokespecial | Invokestatic | Invokevirtual | Getfield | Getstatic | Putfield | Putstatic | LdcW | Ldc2W => display_arg_const_index(f, bytes)?,
+        New | Invokespecial | Invokestatic | Invokevirtual | Getfield | Getstatic | Putfield | Putstatic | LdcW | Ldc2W => display_arg_const_index(f, bytes, constant_pool)?,
         Invokeinterface | Invokedynamic => {
             let Some((_, ih)) = bytes.next() else {
                 return Ok(());
@@ -267,8 +285,9 @@ fn display_arg(opcode: Opcode, f: &mut fmt::Formatter<'_>, bytes: &mut impl Iter
             if zero != 0 {
                 write!(f, ", {zero}")?;
             }
+            display_const_as_comment(f, index, constant_pool)?;
         }
-        Ldc => display_arg_const_index_byte(f, bytes)?,
+        Ldc => display_arg_const_index_byte(f, bytes, constant_pool)?,
         Aload |
         Astore |
         Dload |

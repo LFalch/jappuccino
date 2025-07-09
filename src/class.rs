@@ -46,6 +46,25 @@ impl ClassFile {
     }
 }
 
+mod constant_impl;
+pub use self::constant_impl::*;
+#[inline]
+pub const fn display_constant(n: ConstIndex, constant_pool: &[Constant]) -> DisplayConstant {
+    DisplayConstant(n, constant_pool)
+}
+#[inline]
+pub const fn display_method_descriptor(name_index: ConstIndex, descriptor_index: ConstIndex, constant_pool: &[Constant]) -> DisplayMethodDescriptor {
+    DisplayMethodDescriptor(name_index, descriptor_index, constant_pool)
+}
+#[inline]
+pub const fn display_field_descriptor(descriptor_index: ConstIndex, constant_pool: &[Constant]) -> DisplayFieldDescriptor {
+    DisplayFieldDescriptor(descriptor_index, constant_pool)
+}
+#[inline]
+pub const fn display_descriptor(name_index: ConstIndex, descriptor_index: ConstIndex, constant_pool: &[Constant]) -> DisplayDescriptor {
+    DisplayDescriptor(name_index, descriptor_index, constant_pool)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Constant {
     Class {

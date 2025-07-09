@@ -762,7 +762,17 @@ impl RuntimeCtx<'_> {
                 Opcode::Anewarray => todo!(),
                 Opcode::Arraylength => todo!(),
                 Opcode::Athrow => todo!(),
-                Opcode::Checkcast => todo!(),
+                Opcode::Checkcast => {
+                    let cpn = self.decode_u16();
+                    let class_name = self.read_constant(self.read_constant(cpn).class()).utf8();
+                    let class_name = self.runtime.read_static_string(class_name);
+                    let class_name = class_name.to_string(); // TODO: bad
+                    let id = self.runtime.load_class(&class_name)?;
+
+                    let objectref = self.pop();
+                    // TODO: check its type
+                    self.push(objectref);
+                }
                 Opcode::Instanceof => {
                     let index = self.decode_u16();
                     let objectref = self.pop();
