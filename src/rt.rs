@@ -1,4 +1,4 @@
-use std::{cmp::Reverse, collections::BTreeMap, fs::File, io::{self, BufReader}, iter, mem::transmute, path::Path, str::from_utf8_unchecked};
+use std::{cmp::{Ordering, Reverse}, collections::BTreeMap, fs::File, io::{self, BufReader}, iter, mem::transmute, path::Path, str::from_utf8_unchecked};
 
 use crate::{class::{AttributeInfo, ClassFile, ConstIndex, Constant, FieldAccess}, code::opcode::Opcode, descriptor::{DescriptorError, FieldDescriptor, MethodDescriptor}};
 
@@ -209,9 +209,14 @@ impl RuntimeCtx<'_> {
         self.pc += 2;
         short
     }
+    fn do_goto(&mut self, instruction_length: u8, offset: i16) {
+        self.pc = (self.pc - instruction_length as usize).wrapping_add(offset as isize as usize);
+    }
     fn run_inner(&mut self) -> Result<()> {
         while !self.return_stack.is_empty() {
-            match self.decode_opcode() {
+            let opcode = self.decode_opcode();
+            eprintln!("  ins {}", opcode.mnemonic());
+            match opcode {
                 Opcode::Nop => (),
                 Opcode::AconstNull |
                 Opcode::Iconst0 => self.push(0),
@@ -341,31 +346,63 @@ impl RuntimeCtx<'_> {
                     let val = self.read_u16_ref(arr_ref.offset(index)).unwrap();
                     self.push(val as i16);
                 }
-                Opcode::Istore => todo!(),
-                Opcode::Lstore => todo!(),
-                Opcode::Fstore => todo!(),
-                Opcode::Dstore => todo!(),
-                Opcode::Astore => todo!(),
-                Opcode::Istore0 => todo!(),
-                Opcode::Istore1 => todo!(),
-                Opcode::Istore2 => todo!(),
-                Opcode::Istore3 => todo!(),
-                Opcode::Lstore0 => todo!(),
-                Opcode::Lstore1 => todo!(),
-                Opcode::Lstore2 => todo!(),
-                Opcode::Lstore3 => todo!(),
-                Opcode::Fstore0 => todo!(),
-                Opcode::Fstore1 => todo!(),
-                Opcode::Fstore2 => todo!(),
-                Opcode::Fstore3 => todo!(),
-                Opcode::Dstore0 => todo!(),
-                Opcode::Dstore1 => todo!(),
-                Opcode::Dstore2 => todo!(),
-                Opcode::Dstore3 => todo!(),
-                Opcode::Astore0 => todo!(),
-                Opcode::Astore1 => todo!(),
-                Opcode::Astore2 => todo!(),
-                Opcode::Astore3 => todo!(),
+                Opcode::Istore |
+                Opcode::Fstore |
+                Opcode::Astore => {
+                    let index = self.decode_u8();
+                    let value = self.pop();
+                    self.set_local(index as u16, value);
+                }
+                Opcode::Lstore |
+                Opcode::Dstore => {
+                    let index = self.decode_u8();
+                    let values = self.pop2();
+                    self.set_local2(index as u16, values);
+                }
+                Opcode::Istore0 |
+                Opcode::Fstore0 |
+                Opcode::Astore0 => {
+                    let value = self.pop();
+                    self.set_local(0, value);
+                }
+                Opcode::Istore1 |
+                Opcode::Fstore1 |
+                Opcode::Astore1 => {
+                    let value = self.pop();
+                    self.set_local(1, value);
+                }
+                Opcode::Istore2 |
+                Opcode::Fstore2 |
+                Opcode::Astore2 => {
+                    let value = self.pop();
+                    self.set_local(2, value);
+                }
+                Opcode::Istore3 |
+                Opcode::Fstore3 |
+                Opcode::Astore3 => {
+                    let value = self.pop();
+                    self.set_local(3, value);
+                }
+                Opcode::Lstore0 |
+                Opcode::Dstore0 => {
+                    let values = self.pop2();
+                    self.set_local2(0, values);
+                }
+                Opcode::Lstore1 |
+                Opcode::Dstore1 => {
+                    let values = self.pop2();
+                    self.set_local2(1, values);
+                }
+                Opcode::Lstore2 |
+                Opcode::Dstore2 => {
+                    let values = self.pop2();
+                    self.set_local2(2, values);
+                }
+                Opcode::Lstore3 |
+                Opcode::Dstore3 => {
+                    let values = self.pop2();
+                    self.set_local2(3, values);
+                }
                 Opcode::Iastore => todo!(),
                 Opcode::Lastore => todo!(),
                 Opcode::Fastore => todo!(),
@@ -435,26 +472,111 @@ impl RuntimeCtx<'_> {
                 Opcode::I2b => todo!(),
                 Opcode::I2c => todo!(),
                 Opcode::I2s => todo!(),
-                Opcode::Lcmp => todo!(),
-                Opcode::Fcmpl => todo!(),
-                Opcode::Fcmpg => todo!(),
-                Opcode::Dcmpl => todo!(),
-                Opcode::Dcmpg => todo!(),
-                Opcode::Ifeq => todo!(),
-                Opcode::Ifne => todo!(),
-                Opcode::Iflt => todo!(),
-                Opcode::Ifge => todo!(),
-                Opcode::Ifgt => todo!(),
-                Opcode::Ifle => todo!(),
-                Opcode::IfIcmpeq => todo!(),
-                Opcode::IfIcmpne => todo!(),
-                Opcode::IfIcmplt => todo!(),
-                Opcode::IfIcmpge => todo!(),
-                Opcode::IfIcmpgt => todo!(),
-                Opcode::IfIcmple => todo!(),
-                Opcode::IfAcmpeq => todo!(),
-                Opcode::IfAcmpne => todo!(),
-                Opcode::Goto => todo!(),
+                Opcode::Lcmp => {
+                    let value2 = values_into_u64(self.pop2()) as i64;
+                    let value1 = values_into_u64(self.pop2()) as i64;
+                    self.push(value1.cmp(&value2) as i8);
+                }
+                Opcode::Fcmpl => {
+                    let value2 = self.pop().into_f32();
+                    let value1 = self.pop().into_f32();
+                    self.push(value1.partial_cmp(&value2).unwrap_or(Ordering::Less) as i8);
+                }
+                Opcode::Fcmpg => {
+                    let value2 = self.pop().into_f32();
+                    let value1 = self.pop().into_f32();
+                    self.push(value1.partial_cmp(&value2).unwrap_or(Ordering::Greater) as i8);
+                }
+                Opcode::Dcmpl => {
+                    let value2 = values_into_f64(self.pop2());
+                    let value1 = values_into_f64(self.pop2());
+                    self.push(value1.partial_cmp(&value2).unwrap_or(Ordering::Less) as i8);
+                }
+                Opcode::Dcmpg => {
+                    let value2 = values_into_f64(self.pop2());
+                    let value1 = values_into_f64(self.pop2());
+                    self.push(value1.partial_cmp(&value2).unwrap_or(Ordering::Greater) as i8);
+                }
+                Opcode::Ifnull |
+                Opcode::Ifeq => {
+                    let offset = self.decode_u16() as i16;
+                    if self.pop() == Value::ZERO {
+                        self.do_goto(3, offset);
+                    }
+                }
+                Opcode::Ifnonnull |
+                Opcode::Ifne => {
+                    let offset = self.decode_u16() as i16;
+                    if self.pop() != Value::ZERO {
+                        self.do_goto(3, offset);
+                    }
+                }
+                Opcode::Iflt => {
+                    let offset = self.decode_u16() as i16;
+                    if self.pop().into_i32() < 0 {
+                        self.do_goto(3, offset);
+                    }
+                }
+                Opcode::Ifge => {
+                    let offset = self.decode_u16() as i16;
+                    if self.pop().into_i32() >= 0 {
+                        self.do_goto(3, offset);
+                    }
+                }
+                Opcode::Ifgt => {
+                    let offset = self.decode_u16() as i16;
+                    if self.pop().into_i32() > 0 {
+                        self.do_goto(3, offset);
+                    }
+                }
+                Opcode::Ifle => {
+                    let offset = self.decode_u16() as i16;
+                    if self.pop().into_i32() <= 0 {
+                        self.do_goto(3, offset);
+                    }
+                }
+                Opcode::IfAcmpeq |
+                Opcode::IfIcmpeq => {
+                    let offset = self.decode_u16() as i16;
+                    if self.pop() == self.pop() {
+                        self.do_goto(3, offset);
+                    }
+                }
+                Opcode::IfAcmpne |
+                Opcode::IfIcmpne => {
+                    let offset = self.decode_u16() as i16;
+                    if self.pop() != self.pop() {
+                        self.do_goto(3, offset);
+                    }
+                }
+                Opcode::IfIcmplt => {
+                    let offset = self.decode_u16() as i16;
+                    if self.pop().into_i32() < self.pop().into_i32() {
+                        self.do_goto(3, offset);
+                    }
+                }
+                Opcode::IfIcmpge => {
+                    let offset = self.decode_u16() as i16;
+                    if self.pop().into_i32() >= self.pop().into_i32() {
+                        self.do_goto(3, offset);
+                    }
+                }
+                Opcode::IfIcmpgt => {
+                    let offset = self.decode_u16() as i16;
+                    if self.pop().into_i32() > self.pop().into_i32() {
+                        self.do_goto(3, offset);
+                    }
+                }
+                Opcode::IfIcmple => {
+                    let offset = self.decode_u16() as i16;
+                    if self.pop().into_i32() <= self.pop().into_i32() {
+                        self.do_goto(3, offset);
+                    }
+                }
+                Opcode::Goto => {
+                    let offset = self.decode_u16() as i16;
+                    self.do_goto(3, offset);
+                }
                 Opcode::Jsr => todo!(),
                 Opcode::Ret => todo!(),
                 Opcode::Tableswitch => todo!(),
@@ -465,10 +587,100 @@ impl RuntimeCtx<'_> {
                 Opcode::Freturn |
                 Opcode::Areturn => self.do_return(ReturnCategory::Cat1),
                 Opcode::Return => self.do_return(ReturnCategory::Void),
-                Opcode::Getstatic => todo!(),
-                Opcode::Putstatic => todo!(),
-                Opcode::Getfield => todo!(),
+                Opcode::Getstatic => {
+                    let cpn = self.decode_u16();
+                    let (class_index, name_and_type_index) = self.read_constant(cpn).fieldref();
+                    let class = self.read_constant(self.read_constant(class_index).class()).utf8();
+                    let (name, field_type) = self.read_constant(name_and_type_index).nameandtype();
+                    let name = self.read_constant(name).utf8();
+                    let field_type = self.read_constant(field_type).utf8();
+                    let field_type = FieldDescriptor::from_bytes(self.runtime.read_static_string(field_type).as_bytes())?;
+
+                    let ptr = {
+                        let class = self.runtime.read_static_string(class).to_string();
+                        let class = self.runtime.load_class(&class)?;
+                        let class = self.runtime.get_class(class);
+                        let name = self.runtime.read_static_string(name);
+                        let offset =class.member_table[name];
+                        &class.static_fields[offset as usize]
+                    };
+
+                    match field_type {
+                        FieldDescriptor::Boolean |
+                        FieldDescriptor::Byte => {
+                            let value = *ptr;
+                            self.push(value as i8);
+                        }
+                        FieldDescriptor::Char |
+                        FieldDescriptor::Short => {
+                            let value = unsafe { *(ptr as *const u8 as *const u16) };
+                            self.push(value as i16);
+                        }
+                        FieldDescriptor::ClassRef(_) |
+                        FieldDescriptor::ArrRef(_) |
+                        FieldDescriptor::Float |
+                        FieldDescriptor::Int => {
+                            let value = unsafe { *(ptr as *const u8 as *const u32) };
+                            self.push(value as i32);
+                        }
+                        FieldDescriptor::Double |
+                        FieldDescriptor::Long => {
+                            let ptr = ptr as *const u8 as *const u32;
+                            let v1 = unsafe { *ptr };
+                            let v2 = unsafe { *ptr.add(1) };
+                            self.push2((Value(v1), Value(v2)));
+                        }
+                    }
+                }
+                Opcode::Getfield => {
+                    let cpn = self.decode_u16();
+                    let (class_index, name_and_type_index) = self.read_constant(cpn).fieldref();
+                    let class = self.read_constant(self.read_constant(class_index).class()).utf8();
+                    let (name, field_type) = self.read_constant(name_and_type_index).nameandtype();
+                    let name = self.read_constant(name).utf8();
+                    let field_type = self.read_constant(field_type).utf8();
+                    let field_type = FieldDescriptor::from_bytes(self.runtime.read_static_string(field_type).as_bytes())?;
+
+                    let offset = {
+                        let class = self.runtime.read_static_string(class).to_string();
+                        let class = self.runtime.load_class(&class)?;
+                        let class = self.runtime.get_class(class);
+                        let name = self.runtime.read_static_string(name);
+                        class.member_table[name]
+                    };
+                    let object_ref = self.pop();
+
+                    match field_type {
+                        FieldDescriptor::Boolean |
+                        FieldDescriptor::Byte => {
+                            let value = self.read_u8_ref(object_ref.offset(offset as u32)).unwrap();
+                            self.push(value as i8);
+                        }
+                        FieldDescriptor::Char |
+                        FieldDescriptor::Short => {
+                            let value = self.read_u16_ref(object_ref.offset(offset as u32)).unwrap();
+                            self.push(value as i16);
+                        }
+                        FieldDescriptor::ClassRef(_) |
+                        FieldDescriptor::ArrRef(_) |
+                        FieldDescriptor::Float |
+                        FieldDescriptor::Int => {
+                            let value = self.read_u32_ref(object_ref.offset(offset as u32)).unwrap();
+                            self.push(value as i32);
+                        }
+                        FieldDescriptor::Double |
+                        FieldDescriptor::Long => {
+                            let v1 = self.read_u32_ref(object_ref.offset(offset as u32)).unwrap();
+                            let v2 = self.read_u32_ref(object_ref.offset(offset as u32 + 4)).unwrap();
+                            self.push2((Value(v1), Value(v2)));
+                        }
+                    }
+                }
+                Opcode::Putstatic => {
+
+                }
                 Opcode::Putfield => {
+                    // TODO: no unsafe in rt, all unsafe should be in its own module
                     let cpn = self.decode_u16();
                     let (class_index, name_and_type_index) = self.read_constant(cpn).fieldref();
                     let class = self.read_constant(self.read_constant(class_index).class()).utf8();
@@ -508,8 +720,9 @@ impl RuntimeCtx<'_> {
                         }
                         FieldDescriptor::Double |
                         FieldDescriptor::Long => {
-                            let v2 = self.pop().into_u32();
-                            let v1 = self.pop().into_u32();
+                            let (v1, v2) = self.pop2();
+                            let v1 = v1.into_u32();
+                            let v2 = v2.into_u32();
                             let object_ref = self.pop();
                             self.write_u32_ref(object_ref.offset(offset as u32), v1);
                             self.write_u32_ref(object_ref.offset(offset as u32 + 4), v2);
@@ -550,13 +763,16 @@ impl RuntimeCtx<'_> {
                 Opcode::Arraylength => todo!(),
                 Opcode::Athrow => todo!(),
                 Opcode::Checkcast => todo!(),
-                Opcode::Instanceof => todo!(),
+                Opcode::Instanceof => {
+                    let index = self.decode_u16();
+                    let objectref = self.pop();
+                    // TODO: check of objectref is a index
+                    self.push(false);
+                }
                 Opcode::Monitorenter => todo!(),
                 Opcode::Monitorexit => todo!(),
                 Opcode::Wide => todo!(),
                 Opcode::Multianewarray => todo!(),
-                Opcode::Ifnull => todo!(),
-                Opcode::Ifnonnull => todo!(),
                 Opcode::GotoW => todo!(),
                 Opcode::JsrW => todo!(),
 
@@ -579,14 +795,28 @@ pub enum ReturnCategory {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Value(u32);
 impl Value {
-    pub fn into_u32(self) -> u32 {
+    pub const NULL: Self = Value(0);
+    pub const ZERO: Self = Self::NULL;
+    pub const fn into_u32(self) -> u32 {
         self.0
     }
-    pub fn into_u8(self) -> u8 {
+    pub const fn into_u8(self) -> u8 {
         self.0 as u8
     }
-    pub fn into_u16(self) -> u16 {
+    pub const fn into_u16(self) -> u16 {
         self.0 as u16
+    }
+    pub const fn into_i32(self) -> i32 {
+        self.into_u32() as i32
+    }
+    pub const fn into_f32(self) -> f32 {
+        f32::from_bits(self.into_u32())
+    }
+    pub const fn into_i8(self) -> i8 {
+        self.into_u8() as i8
+    }
+    pub const fn into_i16(self) -> i16 {
+        self.into_u16() as i16
     }
     pub const fn new_ref_static(n: u32) -> Self {
         Self(4 + n)
@@ -609,6 +839,9 @@ impl Value {
 }
 fn values_into_u64(value: (Value, Value)) -> u64 {
     unsafe { transmute(value) }
+}
+fn values_into_f64(value: (Value, Value)) -> f64 {
+    f64::from_bits(values_into_u64(value))
 }
 fn i64_into_values(value: i64) -> (Value, Value) {
     unsafe { transmute(value) }
