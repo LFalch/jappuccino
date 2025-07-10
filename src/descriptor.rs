@@ -27,17 +27,17 @@ impl Display for DescriptorError {
     }
 }
 impl Error for DescriptorError {}
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FieldDescriptor {
-    Byte, // B
-    Char, // C
-    Double, // D
-    Float, // F
     Int, // I
+    Float, // F
+    Double, // D
     Long, // J
-    ClassRef(Box<str>), // L s ;
-    Short, // S
     Boolean, // Z
+    Char, // C
+    Short, // S
+    Byte, // B
+    ClassRef(Box<str>), // L s ;
     ArrRef(Box<Self>), // [ _
 }
 impl FieldDescriptor {
@@ -95,7 +95,7 @@ impl FieldDescriptor {
         DisplayType(self)
     } 
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MethodDescriptor {
     /// ( fd* )
     pub arg_types: Box<[FieldDescriptor]>,
@@ -103,6 +103,18 @@ pub struct MethodDescriptor {
     pub return_type: Option<Box<FieldDescriptor>>,
 }
 impl MethodDescriptor {
+    pub fn new_ret<const N: usize>(arg_types: [FieldDescriptor; N], return_type: FieldDescriptor) -> Self {
+        Self {
+            arg_types: Box::new(arg_types),
+            return_type: Some(Box::new(return_type)),
+        }
+    }
+    pub fn new_void<const N: usize>(arg_types: [FieldDescriptor; N]) -> Self {
+        Self {
+            arg_types: Box::new(arg_types),
+            return_type: None,
+        }
+    }
     pub fn from_bytes(mut bytes: &[u8]) -> Result<Self, DescriptorError> {
         match bytes.get(0).ok_or(DescriptorError::Empty)? {
             b'(' => bytes = &bytes[1..],
@@ -165,6 +177,17 @@ impl Display for DisplayMethodType<'_> {
         write!(f, ")")
     }
 }
+impl From<FieldDescriptor> for AnyDescriptor {
+    fn from(value: FieldDescriptor) -> Self {
+        Self::Field(value)
+    }
+}
+impl From<MethodDescriptor> for AnyDescriptor {
+    fn from(value: MethodDescriptor) -> Self {
+        Self::Method(value)
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnyDescriptor {
     Field(FieldDescriptor),
     Method(MethodDescriptor),

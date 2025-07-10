@@ -1,6 +1,6 @@
 use std::{cmp::{Ordering, Reverse}, collections::BTreeMap, fs::File, io::{self, BufReader}, iter, mem::transmute, path::Path, str::from_utf8_unchecked};
 
-use crate::{class::{AttributeInfo, ClassFile, ConstIndex, Constant, FieldAccess}, code::opcode::Opcode, descriptor::{DescriptorError, FieldDescriptor, MethodDescriptor}};
+use crate::{class::{AttributeInfo, ClassFile, ConstIndex, Constant, FieldAccess, MethodAccess}, code::opcode::Opcode, descriptor::{DescriptorError, FieldDescriptor, MethodDescriptor}};
 
 mod bytes;
 mod builtin_methods;
@@ -14,8 +14,9 @@ pub type Result<T, E=RtError> = std::result::Result<T, E>;
 pub struct RuntimeCtx<'a> {
     runtime: &'a mut Runtime,
     stack: Vec<Value>,
-    return_stack: Vec<(u32, u32, usize)>,
+    return_stack: Vec<(u32, u32, usize, u16)>,
     frame_pointer: u32,
+    max_locals: u16,
     cur_class: u32,
 
     heap: Vec<u32>,
@@ -31,33 +32,53 @@ impl RuntimeCtx<'_> {
         (self.stack[l-2], self.stack[l-1])
     }
     pub fn pop(&mut self) -> Value {
-        self.stack.pop().unwrap()
+        assert!(self.stack.len() > (self.frame_pointer + self.max_locals as u32) as usize);
+        let val = self.stack.pop().unwrap();
+        eprintln!("pop {val:?}");
+        val
     }
     pub fn pop2(&mut self) -> (Value, Value) {
+        assert!(self.stack.len() > 1 + (self.frame_pointer + self.max_locals as u32) as usize);
         let v2 = self.stack.pop().unwrap();
-        (self.stack.pop().unwrap(), v2)
+        let val = (self.stack.pop().unwrap(), v2);
+        eprintln!("pop {val:?}");
+        val
     }
     pub fn push(&mut self, value: impl Into<Value>) {
-        self.stack.push(value.into());
+        let val = value.into();
+        eprintln!("push {val:?}");
+        self.stack.push(val);
     }
     pub fn push2(&mut self, value: impl Into<(Value, Value)>) {
         let (v1, v2) = value.into();
+        eprintln!("push {:?}", (v1, v2));
         self.stack.push(v1);
         self.stack.push(v2);
     }
     pub fn get_local(&self, i: u16) -> Value {
-        self.stack[self.frame_pointer as usize + i as usize]
+        assert!(i < self.max_locals);
+        let val = self.stack[self.frame_pointer as usize + i as usize];
+        eprintln!("get {i} {val:?}");
+        val
     }
     pub fn get_local2(&self, i: u16) -> (Value, Value) {
+        assert!(i < self.max_locals);
         let i = self.frame_pointer as usize + i as usize;
-        (self.stack[i], self.stack[i + 1])
+        let val = (self.stack[i], self.stack[i + 1]);
+        eprintln!("get {i} {val:?}");
+        val
     }
     pub fn set_local(&mut self, i: u16, value: impl Into<Value>) {
-        self.stack[self.frame_pointer as usize + i as usize] = value.into();
+        assert!(i < self.max_locals);
+        let val = value.into();
+        eprintln!("set {i} {val:?}");
+        self.stack[self.frame_pointer as usize + i as usize] = val;
     }
     pub fn set_local2(&mut self, i: u16, value: impl Into<(Value, Value)>) {
+        assert!(i < self.max_locals);
         let i = self.frame_pointer as usize + i as usize;
         let (v1, v2) = value.into();
+        eprintln!("set {i} {:?}", (v1, v2));
         self.stack[i] = v1;
         self.stack[i + 1] = v2;
     }
@@ -70,9 +91,9 @@ impl RuntimeCtx<'_> {
     pub fn new_string_obj(&self, _s: impl Into<Box<str>>) -> Value {
         todo!()
     }
-    pub fn call_named(&mut self, classpath: &str, method_name: &str) -> Result<()> {
+    pub fn call_named(&mut self, classpath: &str, method_name: &str, method_type: MethodDescriptor) -> Result<()> {
         let id = self.runtime.load_class(classpath)?;
-        let method_id = *self.runtime.classes[id as usize].member_table().get(method_name).unwrap();
+        let method_id = self.runtime.classes[id as usize].member_table()[(method_name, &method_type.into())];
         self.invoke(id, method_id);
         Ok(())
     }
@@ -86,16 +107,18 @@ impl RuntimeCtx<'_> {
         }
     }
     pub fn do_call(&mut self, class: u32, arg_num: u16, max_locals: u16, location: usize) {
-        self.return_stack.push((self.cur_class, self.frame_pointer, self.pc));
+        self.return_stack.push((self.cur_class, self.frame_pointer, self.pc, self.max_locals));
         self.frame_pointer = (self.stack.len() - arg_num as usize) as u32;
         self.pc = location;
         self.cur_class = class;
+        self.max_locals = max_locals;
         for _ in arg_num..max_locals {
             self.stack.push(Value(0));
         }
     }
     pub fn do_return(&mut self, ret_cat: ReturnCategory) {
-        let (class, fp, pc) = self.return_stack.pop().unwrap();
+        let (class, fp, pc, max_locals) = self.return_stack.pop().unwrap();
+        eprintln!("return, throwing away: {:?}", &self.stack[self.frame_pointer as usize..]);
         self.pc = pc;
         self.cur_class = class;
         match ret_cat {
@@ -116,7 +139,9 @@ impl RuntimeCtx<'_> {
                 self.push2(return_value);
             }
         }
+        self.max_locals = max_locals;
     }
+    #[track_caller]
     fn read_constant(&self, n: ConstIndex) -> RuntimeConstant {
         match &self.runtime.classes[self.cur_class as usize].runtime_info {
             RuntimeInfo::Bytecode { constant_pool, .. } => {
@@ -241,8 +266,20 @@ impl RuntimeCtx<'_> {
                     let imm = self.decode_u16() as i16;
                     self.push(imm);
                 }
-                Opcode::Ldc => todo!(),
-                Opcode::LdcW => todo!(),
+                Opcode::Ldc => {
+                    let cpn = self.decode_u8();
+                    // TODO: DANGER the constant might not actually be a string!!!
+                    let cpn = self.read_constant(cpn as u16).string();
+                    let s_offset = self.read_constant(cpn).utf8();
+                    self.push(Value::new_ref_static(s_offset));
+                }
+                Opcode::LdcW => {
+                    let cpn = self.decode_u16();
+                    // TODO: DANGER the constant might not actually be a string!!!
+                    let cpn = self.read_constant(cpn as u16).string();
+                    let s_offset = self.read_constant(cpn).utf8();
+                    self.push(Value::new_ref_static(s_offset));
+                }
                 Opcode::Ldc2W => todo!(),
                 Opcode::Iload |
                 Opcode::Fload |
@@ -411,28 +448,53 @@ impl RuntimeCtx<'_> {
                 Opcode::Bastore => todo!(),
                 Opcode::Castore => todo!(),
                 Opcode::Sastore => todo!(),
-                Opcode::Pop => todo!(),
-                Opcode::Pop2 => todo!(),
+                Opcode::Pop => {
+                    self.pop();
+                }
+                Opcode::Pop2 => {
+                    self.pop2();
+                }
                 Opcode::Dup => self.push(self.top()),
                 Opcode::DupX1 => todo!(),
                 Opcode::DupX2 => todo!(),
                 Opcode::Dup2 => todo!(),
                 Opcode::Dup2X1 => todo!(),
                 Opcode::Dup2X2 => todo!(),
-                Opcode::Swap => todo!(),
-                Opcode::Iadd => todo!(),
+                Opcode::Swap => {
+                    let v1 = self.pop();
+                    let v2 = self.pop();
+                    self.push(v1);
+                    self.push(v2);
+                }
+                Opcode::Iadd => {
+                    let v2 = self.pop().into_u32() as i32;
+                    let v1 = self.pop().into_u32() as i32;
+                    self.push(v1+v2);
+                }
                 Opcode::Ladd => todo!(),
                 Opcode::Fadd => todo!(),
                 Opcode::Dadd => todo!(),
-                Opcode::Isub => todo!(),
+                Opcode::Isub => {
+                    let v2 = self.pop().into_u32() as i32;
+                    let v1 = self.pop().into_u32() as i32;
+                    self.push(v1-v2);
+                }
                 Opcode::Lsub => todo!(),
                 Opcode::Fsub => todo!(),
                 Opcode::Dsub => todo!(),
-                Opcode::Imul => todo!(),
+                Opcode::Imul => {
+                    let v2 = self.pop().into_u32() as i32;
+                    let v1 = self.pop().into_u32() as i32;
+                    self.push(v1*v2);
+                }
                 Opcode::Lmul => todo!(),
                 Opcode::Fmul => todo!(),
                 Opcode::Dmul => todo!(),
-                Opcode::Idiv => todo!(),
+                Opcode::Idiv => {
+                    let v2 = self.pop().into_u32() as i32;
+                    let v1 = self.pop().into_u32() as i32;
+                    self.push(v1/v2);
+                }
                 Opcode::Ldiv => todo!(),
                 Opcode::Fdiv => todo!(),
                 Opcode::Ddiv => todo!(),
@@ -601,7 +663,7 @@ impl RuntimeCtx<'_> {
                         let class = self.runtime.load_class(&class)?;
                         let class = self.runtime.get_class(class);
                         let name = self.runtime.read_static_string(name);
-                        let offset =class.member_table[name];
+                        let offset = class.member_table[(name, &field_type.clone().into())];
                         &class.static_fields[offset as usize]
                     };
 
@@ -646,7 +708,7 @@ impl RuntimeCtx<'_> {
                         let class = self.runtime.load_class(&class)?;
                         let class = self.runtime.get_class(class);
                         let name = self.runtime.read_static_string(name);
-                        class.member_table[name]
+                        class.member_table[(name, &field_type.clone().into())]
                     };
                     let object_ref = self.pop();
 
@@ -694,7 +756,7 @@ impl RuntimeCtx<'_> {
                         let class = self.runtime.load_class(&class)?;
                         let class = self.runtime.get_class(class);
                         let name = self.runtime.read_static_string(name);
-                        class.member_table[name]
+                        class.member_table()[(name, &field_type.clone().into())]
                     };
 
                     match field_type {
@@ -744,7 +806,7 @@ impl RuntimeCtx<'_> {
                     eprintln!("Invoking {class_name} {}", method_type.display_type(&name));
                     let class_name = class_name.to_string(); // TODO: bad
                     let name = name.to_string(); // TODO: bad
-                    self.call_named(&class_name, &name)?;
+                    self.call_named(&class_name, &name, method_type)?;
                 }
                 Opcode::Invokestatic => todo!(),
                 Opcode::Invokeinterface => todo!(),
@@ -793,6 +855,22 @@ impl RuntimeCtx<'_> {
             }
         }
         Ok(())
+    }
+    
+    fn read_string_object(&self, sref: Value) -> Option<&str> {
+        Some(match sref.into_ref() {
+            Reference::Invalid => return None,
+            Reference::Heap(offset) => {
+                let len = self.heap[offset as usize / 4];
+                let bytes = &self.heap.as_bytes_32aligned()[offset as usize + 4..][..len as usize];
+                unsafe {
+                    from_utf8_unchecked(bytes)
+                }
+            }
+            Reference::Static(soffset) => {
+                self.runtime.read_static_string(soffset)
+            }
+        })
     }
 }
 
@@ -944,15 +1022,14 @@ enum RuntimeInfo {
         constant_pool: Box<[RuntimeConstant]>,
     }
 }
+mod member_table;
+use self::member_table::MemberTable;
 #[derive(Debug, Clone)]
 struct LoadedClass {
-    #[allow(dead_code)]
     super_class: u32,
-    #[allow(dead_code)]
     interfaces: Box<[u32]>,
-    /// name -> offset (in instance fields, static fields or method table)
-    member_table: BTreeMap<Box<str>, u16>,
-    #[allow(dead_code)]
+    /// name + ' ' + type -> offset (in instance fields, static fields or method table)
+    member_table: MemberTable,
     static_fields: Box<Bytes32Aligned>,
     runtime_info: RuntimeInfo,
     data_size: u16,
@@ -969,7 +1046,7 @@ impl LoadedClass {
     pub fn get_aligned_data_size(&self) -> u16 {
         (self.data_size + 3) & !3
     }
-    fn member_table(&self) -> &BTreeMap<Box<str>, u16> {
+    fn member_table(&self) -> &MemberTable {
         &self.member_table
     }
     fn method(&self, method_id: u16) -> Result<BytecodeMethod, fn(&mut RuntimeCtx)> {
@@ -995,7 +1072,28 @@ impl Runtime {
             class_names,
             code: Vec::new(),
             statics: Vec::new(),
-            classes: vec![load_builtin("java/lang/Object").unwrap()],
+            classes: vec![LoadedClass {
+                super_class: 0,
+                data_size: 0,
+                interfaces: Box::new([]),
+                static_fields: Bytes32Aligned::new_zeroed(0),
+                member_table: {
+                    let mut table = MemberTable::new();
+                    table.insert("<init>", MethodDescriptor::new_void([]), 0);
+                    table.insert("equals", MethodDescriptor::new_void([]), 1);
+                    table.insert("getClass", MethodDescriptor::new_ret([], FieldDescriptor::Boolean), 2);
+                    table.insert("hashCode", MethodDescriptor::new_ret([], FieldDescriptor::Int), 3);
+                    table.insert("toString", MethodDescriptor::new_ret([], FieldDescriptor::ClassRef("java/lang/String".into())), 4);
+                    table
+                },
+                runtime_info: RuntimeInfo::Builtin(Box::new([
+                    builtin_methods::obj_init,
+                    builtin_methods::obj_equals,
+                    builtin_methods::obj_get_class,
+                    builtin_methods::obj_hash_code,
+                    builtin_methods::obj_to_string,
+                ])),
+            }],
         }
     }
     fn get_class(&self, id: u32) -> &LoadedClass {
@@ -1009,7 +1107,7 @@ impl Runtime {
         eprintln!("Loading {classpath}");
 
         let id;
-        if let Some(cls) = load_builtin(classpath) {
+        if let Some(cls) = self.load_builtin(classpath) {
             id = self.classes.len() as u32;
             self.classes.push(cls);
         } else {
@@ -1023,7 +1121,7 @@ impl Runtime {
     }
     fn load_class_file(&mut self, class_file: &ClassFile) -> Result<u32> {
         let mut data_size = 0;
-        let mut member_table = BTreeMap::new();
+        let mut member_table = MemberTable::new();
 
         let super_class = self.load_class(class_file.constant_class(class_file.super_class).unwrap())?;
         let interfaces: Vec<_> = class_file.interfaces
@@ -1052,18 +1150,18 @@ impl Runtime {
                 FieldDescriptor::Double => 8,
                 FieldDescriptor::Long => 8,
             };
-            (name, size, field.access_flags.contains(FieldAccess::STATIC))
+            (name, size, descriptor, field.access_flags.contains(FieldAccess::STATIC))
         }).collect();
-        fields_ordered.sort_by_key(|&(_, size, _)| Reverse(size));
+        fields_ordered.sort_by_key(|&(_, size, _, _)| Reverse(size));
 
         let mut offset = 0;
         let mut static_size = 0;
-        for (name, size, is_static) in fields_ordered {
+        for (name, size, d, is_static) in fields_ordered {
             if is_static {
-                member_table.insert(name.into(), static_size);
+                member_table.insert(name, d, static_size);
                 static_size += size;
             } else {
-                member_table.insert(name.into(), offset);
+                member_table.insert(name, d, offset);
                 offset += size;
             }
         }
@@ -1074,7 +1172,8 @@ impl Runtime {
             let name = class_file.constant_utf8(method.name_index).unwrap();
             let d = class_file.constant_mdescriptor(method.descriptor_index).unwrap();
             let id = method_code.len() as u16;
-            member_table.insert(name.into(), id);
+            member_table.insert(name, d.clone(), id);
+            let implicit_this_arg = !method.access_flags.contains(MethodAccess::STATIC);
 
             for attrib in &method.attributes {
                 match attrib {
@@ -1086,7 +1185,11 @@ impl Runtime {
                         method_code.push(BytecodeMethod {
                             max_stack,
                             max_locals,
-                            arg_num: d.arg_types.iter().map(|arg| arg.unit_size() as u16).sum(),
+                            arg_num: d.arg_types
+                                .iter()
+                                .map(|arg| arg.unit_size() as u16)
+                                .chain(implicit_this_arg.then_some(1))
+                                .sum(),
                             code_location,
                         });
                         continue 'wasd;
@@ -1161,6 +1264,11 @@ impl Runtime {
         self.statics.extend_from_bytes(s.as_bytes());
         string_location as u32
     }
+    pub fn new_static_obj(&mut self, data: &[u8]) -> u32 {
+        let location = self.statics.as_bytes_32aligned().len();
+        self.statics.extend_from_bytes(data);
+        location as u32
+    }
     pub fn read_static_string(&self, offset: u32) -> &str {
         let len = self.statics[offset as usize / 4];
         let bytes = &self.statics.as_bytes_32aligned()[offset as usize + 4..][..len as usize];
@@ -1172,6 +1280,7 @@ impl Runtime {
         let mut ctx = RuntimeCtx {
             frame_pointer: 0,
             pc: 0,
+            max_locals: 0,
             cur_class: 0,
             stack: Vec::new(),
             heap: Vec::new(),
@@ -1180,61 +1289,57 @@ impl Runtime {
         };
         // TODO: generate a real array to push to the stack
         ctx.push(Value(args.as_ptr() as usize as u32));
-        ctx.call_named(classpath, "main")?;
+        ctx.call_named(classpath, "main", MethodDescriptor::new_void([
+            FieldDescriptor::ArrRef(Box::new(FieldDescriptor::ClassRef("java/lang/String".into())))
+        ]))?;
         ctx.run_inner()
     }
-}
-
-fn load_builtin(classpath: &str) -> Option<LoadedClass> {
-    Some(match classpath {
-        "java/lang/Object" => LoadedClass {
-            super_class: 0,
-            data_size: 0,
-            interfaces: Box::new([]),
-            static_fields: Bytes32Aligned::new_zeroed(0),
-            member_table: {
-                let mut table = BTreeMap::new();
-                table.insert("<init>".into(), 0);
-                table.insert("equals".into(), 1);
-                table.insert("getClass".into(), 2);
-                table.insert("hashCode".into(), 3);
-                table.insert("toString".into(), 4);
-                table
+    fn load_builtin(&mut self, classpath: &str) -> Option<LoadedClass> {
+        use self::FieldDescriptor::*;
+        Some(match classpath {
+            "java/lang/String" => LoadedClass {
+                super_class: 0,
+                interfaces: Box::new([]),
+                static_fields: Bytes32Aligned::new_zeroed(0),
+                data_size: u16::MAX,
+                member_table: MemberTable::new(),
+                runtime_info: RuntimeInfo::Builtin(Box::new([])),
             },
-            runtime_info: RuntimeInfo::Builtin(Box::new([
-                builtin_methods::obj_init,
-                builtin_methods::obj_equals,
-                builtin_methods::obj_get_class,
-                builtin_methods::obj_hash_code,
-                builtin_methods::obj_to_string,
-            ])),
-        },
-        "java/lang/String" => LoadedClass {
-            super_class: 0,
-            interfaces: Box::new([]),
-            static_fields: Bytes32Aligned::new_zeroed(0),
-            data_size: u16::MAX,
-            member_table: BTreeMap::new(),
-            runtime_info: RuntimeInfo::Builtin(Box::new([])),
-        },
-        "java/lang/System" => LoadedClass {
-            super_class: 0,
-            interfaces: Box::new([]),
-            static_fields: Bytes32Aligned::new_zeroed(0),
-            data_size: 0,
-            member_table: BTreeMap::new(),
-            runtime_info: RuntimeInfo::Builtin(Box::new([])),
-        },
-        "java/io/PrintStream" => LoadedClass {
-            super_class: 0,
-            interfaces: Box::new([]),
-            static_fields: Bytes32Aligned::new_zeroed(0),
-            data_size: 0,
-            member_table: BTreeMap::new(),
-            runtime_info: RuntimeInfo::Builtin(Box::new([])),
-        },
-        _ => return None,
-    })
+            "java/lang/System" => LoadedClass {
+                super_class: 0,
+                interfaces: Box::new([]),
+                static_fields: {
+                    let mut fields = Bytes32Aligned::new_zeroed(4*3);
+                    for (stream, i) in fields.as_u32_slice_mut().iter_mut().zip(0..) {
+                        *stream = Value::new_ref_static(self.new_static_obj(&[i])).into_u32();
+                    }
+                    fields
+                },
+                data_size: 0,
+                member_table: {
+                    let mut table = MemberTable::new();
+                    table.insert("out", ClassRef("java/io/PrintStream".into()),  0);
+                    table
+                },
+                runtime_info: RuntimeInfo::Builtin(Box::new([])),
+            },
+            "java/io/PrintStream" => LoadedClass {
+                super_class: 0,
+                interfaces: Box::new([]),
+                static_fields: Bytes32Aligned::new_zeroed(0),
+                data_size: 1,
+                member_table: {
+                    let mut table = MemberTable::new();
+                    table.insert("println", MethodDescriptor::new_void([ClassRef("java/lang/String".into())]), 0);
+                    table
+                },
+                runtime_info: RuntimeInfo::Builtin(Box::new([
+                    builtin_methods::printstream_println_str,
+                ])),
+            },
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug)]

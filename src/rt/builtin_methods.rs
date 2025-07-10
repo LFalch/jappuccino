@@ -25,3 +25,15 @@ pub fn obj_to_string(ctx: &mut RuntimeCtx) {
     let string = ctx.new_string_obj(format!("{class_name}@{hash_code:x}"));
     ctx.push(string);
 }
+pub fn printstream_println_str(ctx: &mut RuntimeCtx) {
+    let sref = ctx.pop();
+    let this = ctx.pop();
+    let n = ctx.read_u8_ref(this.offset(0)).unwrap();
+
+    let sref = ctx.read_string_object(sref).unwrap();
+
+    match n {
+        0 => println!("{sref}"),
+        _ => unreachable!(),
+    }
+}
