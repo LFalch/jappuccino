@@ -268,17 +268,13 @@ impl RuntimeCtx<'_> {
                 }
                 Opcode::Ldc => {
                     let cpn = self.decode_u8();
-                    // TODO: DANGER the constant might not actually be a string!!!
-                    let cpn = self.read_constant(cpn as u16).string();
-                    let s_offset = self.read_constant(cpn).utf8();
-                    self.push(Value::new_ref_static(s_offset));
+                    let val = self.read_constant(cpn as u16).value();
+                    self.push(val);
                 }
                 Opcode::LdcW => {
                     let cpn = self.decode_u16();
-                    // TODO: DANGER the constant might not actually be a string!!!
-                    let cpn = self.read_constant(cpn as u16).string();
-                    let s_offset = self.read_constant(cpn).utf8();
-                    self.push(Value::new_ref_static(s_offset));
+                    let val = self.read_constant(cpn as u16).value();
+                    self.push(val);
                 }
                 Opcode::Ldc2W => todo!(),
                 Opcode::Iload |
@@ -984,14 +980,8 @@ impl RuntimeConstant {
     pub const fn interfacemethodref(self) -> (ConstIndex, ConstIndex) {
         unsafe { transmute(self.0) }
     }
-    pub const fn string(self) -> ConstIndex {
-        self.0 as ConstIndex
-    }
-    pub const fn integer(self) -> i32 {
-        self.0 as i32
-    }
-    pub const fn float(self) -> f32 {
-        f32::from_bits(self.0)
+    pub const fn value(self) -> Value {
+        Value(self.0)
     }
     pub const fn nameandtype(self) -> (ConstIndex, ConstIndex) {
         unsafe { transmute(self.0) }
@@ -1200,6 +1190,17 @@ impl Runtime {
             unimplemented!();
         }
 
+        let utf8_offsets: BTreeMap<_, _> = class_file.constant_pool
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| match c {
+                Constant::Utf8(s) => Some((i, self.new_static_string_obj(s))),
+                _ => None,
+            })
+            .collect();
+
+        let mut utf8_offsets_iter = utf8_offsets.values().copied();
+
         let mut gap_val = None;
         let constant_pool = class_file.constant_pool
             .iter()
@@ -1219,8 +1220,7 @@ impl Runtime {
                     Constant::Class { name_index: a } |
                     Constant::MethodType { descriptor_index: a } |
                     Constant::Module { name_index: a } |
-                    Constant::Package { name_index: a } |
-                    Constant::String { string_index: a } => RuntimeConstant(a as u32),
+                    Constant::Package { name_index: a } => RuntimeConstant(a as u32),
                     Constant::Integer { bytes } |
                     Constant::Float { bytes } => RuntimeConstant(bytes),
                     Constant::Double { high_bytes, low_bytes } |
@@ -1233,10 +1233,10 @@ impl Runtime {
                             RuntimeConstant(low_bytes)
                         }
                     }
-                    Constant::Utf8(ref s) => {
-                        let offset = self.new_static_string_obj(s);
-                        RuntimeConstant(offset)
-                    }
+                    Constant::String { string_index } => RuntimeConstant(
+                        Value::new_ref_static(utf8_offsets[&(string_index as usize - 1)]).into_u32(),
+                    ),
+                    Constant::Utf8(_) => RuntimeConstant(utf8_offsets_iter.next().unwrap()),
                     Constant::Gap => RuntimeConstant(gap_val.take().unwrap())
                 }
             })
