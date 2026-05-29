@@ -1,9 +1,9 @@
-use std::{fmt::{self, Debug, Display}, io::{self, Read}};
+use std::{fmt::{self, Debug, Display}, io::{self, Read, Write}};
 
 use bitflags::bitflags;
 use collect_result::CollectResult;
 
-use crate::{code::Code, descriptor::{FieldDescriptor, MethodDescriptor}, modified_utf8::read_modified_utf8, ReadIntExt};
+use crate::{ReadIntExt, code::Code, descriptor::{FieldDescriptor, MethodDescriptor}, modified_utf8::{read_modified_utf8, write_modified_utf8}};
 
 pub type ConstIndex = u16;
 
@@ -49,19 +49,19 @@ impl ClassFile {
 mod constant_impl;
 pub use self::constant_impl::*;
 #[inline]
-pub const fn display_constant(n: ConstIndex, constant_pool: &[Constant]) -> DisplayConstant {
+pub const fn display_constant(n: ConstIndex, constant_pool: &[Constant]) -> DisplayConstant<'_> {
     DisplayConstant(n, constant_pool)
 }
 #[inline]
-pub const fn display_method_descriptor(name_index: ConstIndex, descriptor_index: ConstIndex, constant_pool: &[Constant]) -> DisplayMethodDescriptor {
+pub const fn display_method_descriptor(name_index: ConstIndex, descriptor_index: ConstIndex, constant_pool: &[Constant]) -> DisplayMethodDescriptor<'_> {
     DisplayMethodDescriptor(name_index, descriptor_index, constant_pool)
 }
 #[inline]
-pub const fn display_field_descriptor(descriptor_index: ConstIndex, constant_pool: &[Constant]) -> DisplayFieldDescriptor {
+pub const fn display_field_descriptor(descriptor_index: ConstIndex, constant_pool: &[Constant]) -> DisplayFieldDescriptor<'_> {
     DisplayFieldDescriptor(descriptor_index, constant_pool)
 }
 #[inline]
-pub const fn display_descriptor(name_index: ConstIndex, descriptor_index: ConstIndex, constant_pool: &[Constant]) -> DisplayDescriptor {
+pub const fn display_descriptor(name_index: ConstIndex, descriptor_index: ConstIndex, constant_pool: &[Constant]) -> DisplayDescriptor<'_> {
     DisplayDescriptor(name_index, descriptor_index, constant_pool)
 }
 
@@ -203,6 +203,131 @@ impl Constant {
             _ => false,
         }
     }
+    
+    fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        match *self {
+            Self::Class {
+                name_index,
+            } => {
+                writer.write_all(&[7])?;
+                writer.write_all(&name_index.to_be_bytes())?;
+            },
+            Self::Fieldref {
+                class_index,
+                name_and_type_index,
+            } => {
+                writer.write_all(&[9])?;
+                writer.write_all(&class_index.to_be_bytes())?;
+                writer.write_all(&name_and_type_index.to_be_bytes())?;
+            },
+            Self::Methodref {
+                class_index,
+                name_and_type_index,
+            } => {
+                writer.write_all(&[10])?;
+                writer.write_all(&class_index.to_be_bytes())?;
+                writer.write_all(&name_and_type_index.to_be_bytes())?;
+            },
+            Self::InterfaceMethodref {
+                class_index,
+                name_and_type_index,
+            } => {
+                writer.write_all(&[11])?;
+                writer.write_all(&class_index.to_be_bytes())?;
+                writer.write_all(&name_and_type_index.to_be_bytes())?;
+            },
+            Self::String {
+                string_index,
+            } => {
+                writer.write_all(&[8])?;
+                writer.write_all(&string_index.to_be_bytes())?;
+            },
+            Self::Integer {
+                bytes,
+            } => {
+                writer.write_all(&[3])?;
+                writer.write_all(&bytes.to_be_bytes())?;
+            },
+            Self::Float {
+                bytes,
+            } => {
+                writer.write_all(&[4])?;
+                writer.write_all(&bytes.to_be_bytes())?;
+            },
+            Self::Long {
+                high_bytes,
+                low_bytes,
+            } => {
+                writer.write_all(&[5])?;
+                writer.write_all(&high_bytes.to_be_bytes())?;
+                writer.write_all(&low_bytes.to_be_bytes())?;
+            },
+            Self::Double {
+                high_bytes,
+                low_bytes,
+            } => {
+                writer.write_all(&[6])?;
+                writer.write_all(&high_bytes.to_be_bytes())?;
+                writer.write_all(&low_bytes.to_be_bytes())?;
+            },
+            Self::NameAndType {
+                name_index,
+                descriptor_index,
+            } => {
+                writer.write_all(&[12])?;
+                writer.write_all(&name_index.to_be_bytes())?;
+                writer.write_all(&descriptor_index.to_be_bytes())?;
+            },
+            Self::Utf8(ref s) => {
+                writer.write_all(&[1])?;
+                writer.write_all(&(s.len() as u16).to_be_bytes())?;
+                write_modified_utf8(writer, &s)?;
+            },
+            Self::MethodHandle {
+                reference_kind,
+                reference_index,
+            } => {
+                writer.write_all(&[15, reference_kind])?;
+                writer.write_all(&reference_index.to_be_bytes())?;
+            },
+            Self::MethodType {
+                descriptor_index,
+            } => {
+                writer.write_all(&[16])?;
+                writer.write_all(&descriptor_index.to_be_bytes())?;
+            },
+            Self::Dynamic {
+                bootstrap_method_attr_index,
+                name_and_type_index,
+            } => {
+                writer.write_all(&[17])?;
+                writer.write_all(&bootstrap_method_attr_index.to_be_bytes())?;
+                writer.write_all(&name_and_type_index.to_be_bytes())?;
+            },
+            Self::InvokeDynamic {
+                bootstrap_method_attr_index,
+                name_and_type_index,
+            } => {
+                writer.write_all(&[18])?;
+                writer.write_all(&bootstrap_method_attr_index.to_be_bytes())?;
+                writer.write_all(&name_and_type_index.to_be_bytes())?;
+            },
+            Self::Module {
+                name_index,
+            } => {
+                writer.write_all(&[19])?;
+                writer.write_all(&name_index.to_be_bytes())?;
+            },
+            Self::Package {
+                name_index,
+            } => {
+                writer.write_all(&[20])?;
+                writer.write_all(&name_index.to_be_bytes())?;
+            },
+            Constant::Gap => (),
+        }
+        Ok(())
+    }
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct Field {
@@ -226,6 +351,16 @@ impl Field {
                 attributes.into_boxed_slice()
             }
         })
+    }
+    fn write<W: Write>(&self, writer: &mut W, constant_pool: &[Constant]) -> io::Result<()> {
+        writer.write_all(&self.access_flags.bits().to_be_bytes())?;
+        writer.write_all(&self.name_index.to_be_bytes())?;
+        writer.write_all(&self.descriptor_index.to_be_bytes())?;
+        writer.write_all(&(self.attributes.len() as u16).to_be_bytes())?;
+        for a in &self.attributes {
+            a.to_raw_attribute(constant_pool)?.write(writer)?;
+        }
+        Ok(())
     }
 }
 #[derive(Debug, Clone, PartialEq)]
@@ -251,6 +386,16 @@ impl Method {
             }
         })
     }
+    fn write<W: Write>(&self, writer: &mut W, constant_pool: &[Constant]) -> io::Result<()> {
+        writer.write_all(&self.access_flags.bits().to_be_bytes())?;
+        writer.write_all(&self.name_index.to_be_bytes())?;
+        writer.write_all(&self.descriptor_index.to_be_bytes())?;
+        writer.write_all(&(self.attributes.len() as u16).to_be_bytes())?;
+        for a in &self.attributes {
+            a.to_raw_attribute(constant_pool)?.write(writer)?;
+        }
+        Ok(())
+    }
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct RawAttribute {
@@ -267,6 +412,11 @@ impl RawAttribute {
                 info
             }
         })
+    }
+    fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        writer.write_all(&self.attribute_name_index.to_be_bytes())?;
+        writer.write_all(&(self.info.len() as u32).to_be_bytes())?;
+        writer.write_all(&self.info)
     }
 }
 #[derive(Debug, Clone, PartialEq)]
@@ -438,6 +588,45 @@ impl AttributeInfo {
             "ModuleMainClass" => Self::ModuleMainClass(RawBytes(info)),
             _ => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unknown attribute {name}"))),
         })
+    }
+    fn find_name(name: &str, constant_pool: &[Constant]) -> Option<u16> {
+        constant_pool.iter().position(|c| match c {
+            Constant::Utf8(s) => **s == *name,
+            _ => false,
+        }).map(|i| 1 + i as u16)
+    }
+    fn to_raw_attribute(&self, constant_pool: &[Constant]) -> io::Result<RawAttribute> {
+        let mut info = Vec::new();
+        let name = match self {
+            AttributeInfo::ConstantValue { constantvalue_index } => {
+                info.extend(constantvalue_index.to_be_bytes());
+                "ConstantValue"
+            }
+            AttributeInfo::Code { max_stack, max_locals, code, exception_table, attributes } => {
+                info.extend(max_stack.to_be_bytes());
+                info.extend(max_locals.to_be_bytes());
+                info.extend((code.0.len() as u32).to_be_bytes());
+                info.extend_from_slice(&code.0);
+                info.extend((exception_table.len() as u16).to_be_bytes());
+                for ee in exception_table {
+                    info.extend(ee.start_pc.to_be_bytes());
+                    info.extend(ee.end_pc.to_be_bytes());
+                    info.extend(ee.handler_pc.to_be_bytes());
+                    info.extend(ee.catch_type.to_be_bytes());
+                }
+                info.extend((attributes.len() as u16).to_be_bytes());
+                for a in attributes {
+                    a.to_raw_attribute(constant_pool)?.write(&mut info)?;
+                }
+                "Code"
+            }
+            _ => todo!(),
+        };
+
+        let Some(attribute_name_index) = Self::find_name(name, constant_pool) else {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, format!("attribute {name} not found in constant pool")));
+        };
+        Ok(RawAttribute{ attribute_name_index, info: info.into_boxed_slice() })
     }
 }
 #[derive(Debug, Clone, PartialEq)]
@@ -717,6 +906,7 @@ impl ClassFile {
                 Ok(c)
             }
         }).collect_result()?;
+        eprintln!("yummy constant pool");
         let access_flags = reader.read_u16()?;
         let this_class = reader.read_u16()?;
         let super_class = reader.read_u16()?;
@@ -724,8 +914,11 @@ impl ClassFile {
         let interfaces: Vec<_> = (0..interfaces_count).map(|_| reader.read_u16()).collect_result()?;
         let fields_count = reader.read_u16()?;
         let fields: Vec<_> = (0..fields_count).map(|_| Field::read(&mut reader, &constant_pool)).collect_result()?;
+        eprintln!("yummy stuff");
         let methods_count = reader.read_u16()?;
+        eprintln!("methods {methods_count}");
         let methods: Vec<_> = (0..methods_count).map(|_| Method::read(&mut reader, &constant_pool)).collect_result()?;
+        eprintln!("yummy methods");
         let attributes = {
             let attributes_count = reader.read_u16()?;
             let attributes: Vec<_> = (0..attributes_count).map(|_| {
@@ -746,5 +939,36 @@ impl ClassFile {
             methods: methods.into_boxed_slice(),
             attributes,
         })
+    }
+    pub fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        writer.write_all(&[0xCA, 0xFE, 0xBA, 0xBE])?;
+        writer.write_all(&self.version.1.to_be_bytes())?;
+        writer.write_all(&self.version.0.to_be_bytes())?;
+
+        writer.write_all(&(self.constant_pool.len() as u16 + 1).to_be_bytes())?;
+        for constant in &self.constant_pool {
+            constant.write(writer)?;
+        }
+        writer.write_all(&self.access_flags.bits().to_be_bytes())?;
+        writer.write_all(&self.this_class.to_be_bytes())?;
+        writer.write_all(&self.super_class.to_be_bytes())?;
+        writer.write_all(&(self.interfaces.len() as u16).to_be_bytes())?;
+        for i in &self.interfaces {
+            writer.write_all(&i.to_be_bytes())?;
+        }
+        writer.write_all(&(self.fields.len() as u16).to_be_bytes())?;
+        for f in &self.fields {
+            f.write(writer, &self.constant_pool)?;
+        }
+        writer.write_all(&(self.methods.len() as u16).to_be_bytes())?;
+        for m in &self.methods {
+            m.write(writer, &self.constant_pool)?;
+        }
+        writer.write_all(&(self.attributes.len() as u16).to_be_bytes())?;
+        for a in &self.attributes {
+            a.to_raw_attribute(&self.constant_pool)?.write(writer)?;
+        }
+
+        Ok(())
     }
 }

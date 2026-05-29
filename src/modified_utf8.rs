@@ -1,4 +1,4 @@
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 
 use crate::ReadIntExt;
 
@@ -67,4 +67,35 @@ pub fn read_modified_utf8<R: Read>(mut reader: R, length: usize) -> io::Result<S
     }
 
     Ok(string)
+}
+
+pub fn write_modified_utf8<W: Write>(writer: &mut W, s: &str) -> io::Result<()> {
+    for c in s.chars() {
+        let codepoint = c as u32;
+        match codepoint {
+            1..=0x7f => writer.write_all(&[codepoint as u8])?,
+            0 | 0x80..=0x7ff => {
+                let x = 0b1100_0000 | (codepoint >> 6) as u8;
+                let y = 0b1000_0000 | (codepoint & 0b11_1111) as u8;
+                writer.write_all(&[x, y])?;
+            }
+            0x800..=0xffff => {
+                let x = 0b1110_0000 | (codepoint >> 12) as u8;
+                let y = 0b1000_0000 | ((codepoint >> 6) & 0b11_1111) as u8;
+                let z = 0b1000_0000 | (codepoint & 0b11_1111) as u8;
+                writer.write_all(&[x, y, z])?;
+            }
+            0x10000.. => {
+                let u = 0b1110_1101;
+                let v = 0b1010_0000 | ((codepoint >> 16) - 1) as u8;
+                let w = 0b1000_0000 | ((codepoint >> 10) & 0b11_1111) as u8;
+                let x = 0b1110_1101;
+                let y = 0b1011_0000 | ((codepoint >> 6) & 0b1111) as u8;
+                let z = 0b1000_0000 | (codepoint & 0b11_1111) as u8;
+                writer.write_all(&[u, v, w, x, y, z])?;
+            }
+        }
+    }
+
+    Ok(())
 }
